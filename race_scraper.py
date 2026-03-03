@@ -47,15 +47,19 @@ def _zenkaku_to_frame(s: str) -> str:
     return mapping.get(s.strip(), s.strip())
 
 
+def _fetch_racelist_soup(race_no: int, date_str: str) -> BeautifulSoup | None:
+    """racelist ページの BeautifulSoup を返す（soup 共有用）。"""
+    url = f"{BASE_URL}/owpc/pc/race/racelist"
+    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    return _get_soup(url, params)
+
 
 # ─────────────────────────────────────────────
 # 1. 出走表取得
 # ─────────────────────────────────────────────
-def fetch_race_card(race_no: int, date_str: str | None = None) -> pd.DataFrame:
+def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None) -> pd.DataFrame:
     if date_str is None: date_str = datetime.now().strftime("%Y%m%d")
-    url = f"{BASE_URL}/owpc/pc/race/racelist"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
-    soup = _get_soup(url, params)
+    soup = _soup if _soup is not None else _fetch_racelist_soup(race_no, date_str)
     if not soup: return pd.DataFrame()
 
     tbody_list = soup.find_all("tbody", class_=re.compile("is-fs12"))
@@ -332,11 +336,27 @@ def fetch_full_race_data(
     weather dict に "grade", "is_final", "grade_title" キーが追加される。
     DataFrame に "コース別1着率", "直近平均着順", "直近勝率" 列が追加される。
     """
-    card_df = fetch_race_card(race_no, date_str)
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    # ── Phase 1: 独立した3つのHTTPリクエストを並列実行 ──────
+    # racelist soup → 出走表 + グレード（同一ページから2つ抽出）
+    # beforeinfo   → 展示タイム + 気象
+    # gamagori_time → 蒲郡独自展示データ
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f_soup  = executor.submit(_fetch_racelist_soup, race_no, date_str)
+        f_before = executor.submit(fetch_before_info, race_no, date_str)
+        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str)
+
+        racelist_soup = f_soup.result()
+        ex_df, weather = f_before.result()
+        gama_time_df = f_gama.result()
+
+    # ── 出走表をsoupからパース（HTTPリクエストなし） ──────
+    card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
     if card_df.empty:
         return pd.DataFrame(), {}
 
-    ex_df, weather = fetch_before_info(race_no, date_str)
     if not ex_df.empty:
         final_df = pd.merge(card_df, ex_df, on="枠番", how="left")
     else:
@@ -347,7 +367,6 @@ def fetch_full_race_data(
         final_df["周回タイム"] = None
 
     # ── 蒲郡公式サイト：オリジナル展示タイム取得 ──────
-    gama_time_df = fetch_gamagori_time(race_no, date_str)
     if not gama_time_df.empty:
         final_df = pd.merge(final_df, gama_time_df, on="枠番", how="left")
     else:
@@ -356,8 +375,8 @@ def fetch_full_race_data(
         final_df["まわり足タイム"] = None
         final_df["直線タイム"] = None
 
-    # ── レースグレード検出 ────────────────────────
-    grade_info = fetch_race_grade(race_no, date_str)
+    # ── グレード検出（同じsoupを再利用、HTTPリクエストなし）──
+    grade_info = fetch_race_grade(race_no, date_str, _soup=racelist_soup)
     weather["grade"] = grade_info["grade"]
     weather["is_final"] = grade_info["is_final"]
     weather["grade_title"] = grade_info["title"]
@@ -812,7 +831,7 @@ def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
 # ─────────────────────────────────────────────
 # 7. レースグレード検出
 # ─────────────────────────────────────────────
-def fetch_race_grade(race_no: int, date_str: str | None = None) -> dict:
+def fetch_race_grade(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None) -> dict:
     """
     racelist ページからレースグレードと節情報を検出する。
 
@@ -825,9 +844,7 @@ def fetch_race_grade(race_no: int, date_str: str | None = None) -> dict:
 
     result = {"grade": "一般", "is_final": False, "title": ""}
 
-    url = f"{BASE_URL}/owpc/pc/race/racelist"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
-    soup = _get_soup(url, params)
+    soup = _soup if _soup is not None else _fetch_racelist_soup(race_no, date_str)
     if not soup:
         return result
 
@@ -1376,3 +1393,236 @@ def generate_sample_data(race_no: int = 1) -> tuple[pd.DataFrame, dict]:
         "grade": "一般", "is_final": False, "grade_title": "",
     }
     return pd.DataFrame(data), weather
+
+
+# ─────────────────────────────────────────────
+# 14. 蒲郡コース別決まり手データ取得
+# ─────────────────────────────────────────────
+def fetch_venue_kimarite() -> dict:
+    """
+    boatrace.jp のボートレース場データページからコース別決まり手データを取得する。
+
+    データソース: /owpc/pc/data/stadium?jcd=07
+    テーブル「コース別1着率・決まり手」(直近3ヶ月)をパースする。
+
+    Returns
+    -------
+    {
+        1: {"1着率": 58.3, "逃げ": 97.4, "まくり": 0.0, "差し": 0.0,
+            "まくり差し": 0.0, "抜き": 2.5, "恵まれ": 0.0},
+        2: {...}, ... 6: {...}
+    }
+    空辞書の場合はデータ取得失敗（config.py のデフォルト値にフォールバック）。
+    """
+    url = f"{BASE_URL}/owpc/pc/data/stadium"
+    params = {"jcd": JYCD}
+    soup = _get_soup(url, params)
+    if not soup:
+        return {}
+
+    kimarite = {}
+    try:
+        for tbl in soup.find_all("table"):
+            tbl_text = tbl.get_text()
+            # 決まり手テーブルを特定: 「逃げ」と「まくり差し」の両方を含む
+            if "逃げ" not in tbl_text or "まくり差し" not in tbl_text:
+                continue
+            if "コース" not in tbl_text:
+                continue
+
+            for tr in tbl.find_all("tr"):
+                cells = tr.find_all(["td", "th"])
+                texts = [c.get_text(strip=True) for c in cells]
+                if not texts:
+                    continue
+                # コース番号(1-6)で始まる行を探す
+                if not re.fullmatch(r'[1-6]', texts[0]):
+                    continue
+
+                course = int(texts[0])
+                nums = []
+                for t in texts[1:]:
+                    v = _to_float(t)
+                    nums.append(v if v is not None else 0.0)
+
+                if len(nums) >= 7:
+                    # 着順率6列 + 決まり手6列 = 12列以上の場合
+                    # 列順: 1着率,2着率,3着率,4着率,5着率,6着率, 逃げ,まくり(捲り),差し,まくり差し,抜き,恵まれ
+                    kimarite[course] = {
+                        "1着率":     nums[0],
+                        "逃げ":      nums[6] if len(nums) >= 13 else nums[1],
+                        "まくり":    nums[7] if len(nums) >= 13 else nums[2],
+                        "差し":      nums[8] if len(nums) >= 13 else nums[3],
+                        "まくり差し": nums[9] if len(nums) >= 13 else nums[4],
+                        "抜き":      nums[10] if len(nums) >= 13 else nums[5],
+                        "恵まれ":    nums[11] if len(nums) >= 13 else nums[6],
+                    }
+
+            if kimarite:
+                break
+    except Exception as e:
+        print(f"[scraper] 決まり手データ取得失敗: {e}")
+
+    return kimarite
+
+
+# ─────────────────────────────────────────────
+# 15. 選手別決まり手データ取得（kyoteibiyori.com）
+# ─────────────────────────────────────────────
+_KYOTEI_BASE = "https://kyoteibiyori.com"
+_KYOTEI_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Referer": "https://kyoteibiyori.com/",
+    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+
+def _parse_henko_html(html: str, course: int) -> dict | None:
+    """
+    request_racer_henko.php の HTML レスポンスを解析し、
+    指定コースの決まり手データを返す。
+
+    HTML テーブル構造（新概念データ）:
+        Row 0: ヘッダー（黒:直近1年/灰:直近6ヶ月）
+        Row 1: コース番号 1-6
+        Group 1 (rows 2-4): 逃げ/逃し — コース1-2のみ
+        Group 2 (rows 5-7): 差され/差し — 全6コース
+        Group 3 (rows 8-10): 捲られ/捲り — 全6コース
+        Group 4 (rows 11-13): 捲られ差/捲り差し — 全6コース
+        各グループ: [ラベル行, 1年データ行, 6ヶ月データ行]
+    コース1: 逃げ(勝ち) / 差され・捲られ・捲られ差(負け)
+    コース2-6: 逃し(負け) / 差し・捲り・捲り差し(勝ち)
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    rows = soup.find_all("tr")
+    if len(rows) < 7:
+        return None
+
+    def _extract_pcts(tr_tag) -> list[float]:
+        pcts = []
+        for c in tr_tag.find_all("td"):
+            text = c.get_text(strip=True).replace("%", "")
+            try:
+                pcts.append(float(text))
+            except ValueError:
+                pass
+        return pcts
+
+    # 直近6ヶ月データ（各グループの2番目のデータ行）を使う
+    # 構造: [ラベル行, 1年データ行, 6ヶ月データ行] × 4グループ
+    g1_6m = _extract_pcts(rows[4]) if len(rows) > 4 else []
+    g2_6m = _extract_pcts(rows[7]) if len(rows) > 7 else []
+    g3_6m = _extract_pcts(rows[10]) if len(rows) > 10 else []
+    g4_6m = _extract_pcts(rows[13]) if len(rows) > 13 else []
+
+    if course == 1:
+        nige = g1_6m[0] if len(g1_6m) > 0 else 0.0
+        return {
+            "逃げ": nige,
+            "差し": 0.0,
+            "まくり": 0.0,
+            "まくり差し": 0.0,
+            "抜き": 0.0,
+            "恵まれ": 0.0,
+            "レース数": 0,
+        }
+    else:
+        idx = course - 1  # 0-indexed into the 6-element arrays
+        sashi = g2_6m[idx] if len(g2_6m) > idx else 0.0
+        makuri = g3_6m[idx] if len(g3_6m) > idx else 0.0
+        makuri_sashi = g4_6m[idx] if len(g4_6m) > idx else 0.0
+        return {
+            "逃げ": 0.0,
+            "差し": sashi,
+            "まくり": makuri,
+            "まくり差し": makuri_sashi,
+            "抜き": 0.0,
+            "恵まれ": 0.0,
+            "レース数": 0,
+        }
+
+
+def fetch_racer_kimarite(
+    race_no: int,
+    date_str: str,
+    df_race_card: pd.DataFrame | None = None,
+) -> dict:
+    """
+    kyoteibiyori.com の新概念データ API から選手別・枠別の決まり手データを取得する。
+
+    各選手のコース（枠番）における直近1年の決まり手分布
+    （逃げ/差し/まくり/まくり差し）をパーセンテージで返す。
+
+    Parameters
+    ----------
+    race_no : レース番号 (1-12)
+    date_str : 日付文字列 "YYYYMMDD"
+    df_race_card : 出走表DataFrame（登録番号を含む）。Noneの場合は内部で取得する。
+
+    Returns
+    -------
+    {
+        "1": {"逃げ": 45.2, "差し": 0.0, "まくり": 0.0, "まくり差し": 0.0,
+              "抜き": 0.0, "恵まれ": 0.0, "レース数": 0},
+        "2": {...}, ... "6": {...}
+    }
+    空辞書の場合はデータ取得失敗。
+    """
+    import json
+
+    # 出走表から登録番号を取得
+    if df_race_card is None or df_race_card.empty:
+        df_race_card = fetch_race_card(race_no, date_str)
+    if df_race_card.empty or "登録番号" not in df_race_card.columns:
+        print("[scraper] 選手別決まり手: 出走表に登録番号なし")
+        return {}
+
+    result = {}
+
+    def _fetch_one(frame_no: str, player_no: str):
+        """1選手分の決まり手データを取得する。"""
+        try:
+            reqdata = json.dumps({
+                "mode": 0,
+                "player_no": str(player_no),
+                "grade": 1,  # 1=総合
+            })
+            resp = requests.post(
+                f"{_KYOTEI_BASE}/racer/request_racer_henko.php",
+                data={"data": reqdata},
+                headers={
+                    **_KYOTEI_HEADERS,
+                    "Referer": f"{_KYOTEI_BASE}/racer/racer_no/{player_no}",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return frame_no, None
+
+            data = _parse_henko_html(resp.text, int(frame_no))
+            return frame_no, data
+        except Exception as e:
+            print(f"[scraper] 選手別決まり手取得エラー ({frame_no}号艇): {e}")
+            return frame_no, None
+
+    # 6選手を並列で取得
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = []
+        for _, row in df_race_card.iterrows():
+            frame_no = str(row.get("枠番", ""))
+            player_no = row.get("登録番号")
+            if frame_no and player_no:
+                futures.append(executor.submit(_fetch_one, frame_no, str(player_no)))
+
+        for future in as_completed(futures):
+            frame_no, data = future.result()
+            if data is not None:
+                result[frame_no] = data
+
+    if result:
+        print(f"[scraper] 選手別決まり手: {len(result)}名分取得成功")
+    else:
+        print("[scraper] 選手別決まり手: データ取得失敗（フォールバックなし）")
+
+    return result

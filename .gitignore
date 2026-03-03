@@ -8,3 +8,12 @@ venv/
 dist/
 build/
 .streamlit/secrets.toml
+
+# ローカル専用ファイル（デプロイ不要）
+backtest_data.json
+prediction_log.json
+debug_*.py
+test_*.py
+start_app.bat
+app_fetch_patch.py
+*コピー*

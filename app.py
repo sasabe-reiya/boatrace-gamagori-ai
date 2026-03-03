@@ -8,37 +8,80 @@
 """
 import sys
 import os
+import hashlib
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import date, datetime
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import JYNAME
+import streamlit.components.v1 as components
 from race_scraper import (
-    fetch_full_race_data, generate_sample_data,
+    fetch_full_race_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
-    fetch_race_result,
+    fetch_venue_kimarite, fetch_racer_kimarite,
 )
 from scorer import predict
-from result_tracker import (
-    save_prediction, record_result,
-    get_accuracy_stats, get_recent_predictions,
-)
-from backtester import (
-    load_backtest_data, collect_historical_data,
-    optimize_from_backtest, apply_to_config, WEIGHT_KEYS,
-)
+from result_tracker import save_prediction
 
-st.set_page_config(page_title="蒲郡競艇AI予想", page_icon="🚤", layout="centered")
+st.set_page_config(page_title="舟券錬金術 - 蒲郡", page_icon="⚗️", layout="centered", initial_sidebar_state="expanded")
+
+# ── パスワード認証 ──────────────────────────────────────────────────
+APP_PASSWORD = "sasabe"
+_AUTH_TOKEN = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()[:16]
+
+def check_password():
+    """パスワード認証。正しいパスワードが入力されるまでアプリを表示しない。
+    認証後はURLにトークンを付与し、リロードしても再入力不要にする。"""
+    if st.session_state.get("authenticated"):
+        return True
+
+    # URLのトークンで自動認証（リロード時）
+    if st.query_params.get("token") == _AUTH_TOKEN:
+        st.session_state["authenticated"] = True
+        return True
+
+    st.markdown(
+        '<div style="max-width:400px;margin:80px auto;text-align:center">'
+        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">⚗️ 蒲郡 舟券錬金術</h2>'
+        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">GAMAGORI ALCHEMIST</p>'
+        '<p style="color:#7ab8e8">アクセスにはパスワードが必要です</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.form("login_form"):
+        password = st.text_input("パスワード", type="password", placeholder="パスワードを入力")
+        submitted = st.form_submit_button("ログイン", use_container_width=True, type="primary")
+
+    if submitted:
+        if password == APP_PASSWORD:
+            st.session_state["authenticated"] = True
+            st.query_params["token"] = _AUTH_TOKEN
+            st.rerun()
+        else:
+            st.error("パスワードが正しくありません")
+
+    return False
+
+if not check_password():
+    st.stop()
 
 st.markdown("""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <style>
     /* ── ベーススタイル ─────────────────────────────────── */
-    .main-header { background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 50%, #0d2855 100%); padding: 1rem; border-radius: 10px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; }
-    .main-header h1 { color: #e8f4ff; margin: 0; font-size: 1.3rem; }
+    .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
+    .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
+    .main-header .logo-row { display: flex; align-items: center; gap: 12px; position: relative; z-index: 1; }
+    .main-header .logo-icon { flex-shrink: 0; }
+    .main-header h1 { color: #e8f4ff; margin: 0; font-size: 1.3rem; letter-spacing: 2px; }
+    .main-header .logo-sub { color: #5a9fd4; font-size: 0.65rem; letter-spacing: 4px; text-transform: uppercase; margin-top: 2px; font-weight: 600; }
+    .main-header .logo-wave { position: absolute; bottom: 0; left: 0; right: 0; height: 20px; z-index: 0; opacity: 0.15; }
     .bet-box { background: #1a2744; border-left: 5px solid #f0a500; padding: 0.9rem 1rem; margin: 0.4rem 0; border-radius: 6px; }
     .bet-box-value { background: #12301a; border-left: 5px solid #2ecc71; padding: 0.9rem 1rem; margin: 0.4rem 0; border-radius: 6px; }
     .bet-box-sub { background: #151f35; border-left: 3px solid #7ab8e8; padding: 0.9rem 1rem; margin: 0.4rem 0; border-radius: 6px; }
@@ -74,7 +117,9 @@ st.markdown("""
         section[data-testid="stSidebar"] { min-width: 260px !important; }
 
         /* 見出しサイズ調整 */
-        .main-header h1 { font-size: 1.15rem; }
+        .main-header h1 { font-size: 1.1rem; letter-spacing: 1px; }
+        .main-header .logo-sub { font-size: 0.58rem; letter-spacing: 3px; }
+        .main-header .logo-icon svg { width: 38px; height: 38px; }
         h3 { font-size: 1.1rem !important; }
 
         /* ボタンを押しやすく */
@@ -92,212 +137,180 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>🚤 蒲郡ボートレース予想システム</h1></div>', unsafe_allow_html=True)
+st.markdown('''<div class="main-header">
+  <div class="logo-row">
+    <div class="logo-icon">
+      <svg width="46" height="46" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="flask-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#f0a500" stop-opacity="0.9"/>
+            <stop offset="50%" stop-color="#e08600" stop-opacity="0.8"/>
+            <stop offset="100%" stop-color="#2ecc71" stop-opacity="0.6"/>
+          </linearGradient>
+          <linearGradient id="flask-glass" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.4"/>
+            <stop offset="100%" stop-color="#1e5fa8" stop-opacity="0.2"/>
+          </linearGradient>
+          <linearGradient id="wave1" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.8"/>
+            <stop offset="100%" stop-color="#1e5fa8" stop-opacity="0.3"/>
+          </linearGradient>
+        </defs>
+        <!-- フラスコ本体 -->
+        <path d="M38 18 L38 40 L20 72 Q18 78, 24 80 L76 80 Q82 78, 80 72 L62 40 L62 18" fill="url(#flask-glass)" stroke="#5cb8ff" stroke-width="1.5"/>
+        <!-- フラスコ口 -->
+        <rect x="35" y="12" width="30" height="8" rx="3" fill="#0d2855" stroke="#5cb8ff" stroke-width="1"/>
+        <!-- 液体 -->
+        <path d="M28 62 Q40 56, 50 62 Q60 68, 72 62 L76 80 Q82 78, 80 72 L76 80 L24 80 Q18 78, 20 72 Z" fill="url(#flask-fill)" opacity="0.8"/>
+        <!-- 泡 -->
+        <circle cx="40" cy="65" r="2.5" fill="#f0a500" opacity="0.6"/>
+        <circle cx="55" cy="60" r="1.8" fill="#2ecc71" opacity="0.5"/>
+        <circle cx="48" cy="58" r="1.5" fill="#ffe066" opacity="0.7"/>
+        <circle cx="60" cy="66" r="2" fill="#f0a500" opacity="0.4"/>
+        <!-- 蒸気・キラキラ -->
+        <path d="M44 12 Q42 5, 44 0" stroke="#ffe066" stroke-width="1" fill="none" opacity="0.6"/>
+        <path d="M50 12 Q50 3, 52 -2" stroke="#f0a500" stroke-width="1.2" fill="none" opacity="0.7"/>
+        <path d="M56 12 Q58 5, 56 0" stroke="#ffe066" stroke-width="1" fill="none" opacity="0.5"/>
+        <!-- キラキラ -->
+        <g opacity="0.8">
+          <line x1="12" y1="30" x2="18" y2="30" stroke="#ffe066" stroke-width="1"/>
+          <line x1="15" y1="27" x2="15" y2="33" stroke="#ffe066" stroke-width="1"/>
+        </g>
+        <g opacity="0.6">
+          <line x1="82" y1="22" x2="88" y2="22" stroke="#ffe066" stroke-width="1"/>
+          <line x1="85" y1="19" x2="85" y2="25" stroke="#ffe066" stroke-width="1"/>
+        </g>
+        <g opacity="0.5">
+          <line x1="78" y1="50" x2="82" y2="50" stroke="#4aa3ff" stroke-width="0.8"/>
+          <line x1="80" y1="48" x2="80" y2="52" stroke="#4aa3ff" stroke-width="0.8"/>
+        </g>
+        <!-- 波（下部） -->
+        <path d="M0 85 Q12 80, 25 85 Q38 90, 50 85 Q62 80, 75 85 Q88 90, 100 85 L100 100 L0 100 Z" fill="url(#wave1)" opacity="0.25"/>
+      </svg>
+    </div>
+    <div>
+      <h1>蒲郡 舟券錬金術</h1>
+      <div class="logo-sub">GAMAGORI ALCHEMIST</div>
+    </div>
+  </div>
+  <svg class="logo-wave" viewBox="0 0 1200 30" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M0 15 Q150 0, 300 15 Q450 30, 600 15 Q750 0, 900 15 Q1050 30, 1200 15 L1200 30 L0 30 Z" fill="#4aa3ff"/>
+  </svg>
+</div>''', unsafe_allow_html=True)
 
 # ── セッション初期化 ──────────────────────────────────────────────
-for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka"):
+for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km", "kimarite"):
     if key not in st.session_state:
         st.session_state[key] = None
 
 # ── サイドバー ────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ レース設定")
-    race_no   = st.selectbox("レース番号", list(range(1, 13)), index=0)
+    race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=False, format_func=lambda x: f"{x}R")
     race_date = st.date_input("開催日", date.today())
-    use_sample = st.checkbox("サンプルデータを使用")
-    use_extended = st.checkbox("拡張データ取得（コース別成績・直近成績）", value=False,
-                               help="選手個別のコース別1着率・直近10走の成績を取得します（追加で数秒かかります）")
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
-    st.markdown("---")
 
-    # ── 結果自動取得セクション ──────────────────────────────────
-    st.markdown("### 📝 レース結果取得")
-    st.caption("レース終了後に結果を自動取得して的中率を記録します")
-    r_date = st.date_input("結果日付", date.today(), key="r_date")
-    r_race = st.selectbox("レース番号", list(range(1, 13)), key="r_race")
-    if st.button("🔍 結果を自動取得", use_container_width=True, type="primary"):
-        d_str_r = r_date.strftime("%Y%m%d")
-        with st.spinner("結果を取得中..."):
-            res_data = fetch_race_result(r_race, d_str_r)
-        if res_data is None:
-            st.warning("結果を取得できませんでした。レースが終了していないか、データ未公開の可能性があります。")
-        else:
-            actual = record_result(
-                d_str_r, r_race,
-                res_data["1着"], res_data["2着"], res_data["3着"]
-            )
-            combo = actual["三連単"]
-            if actual["hit"]:
-                st.success(f"✅ 的中！ {combo}（{', '.join(actual['hit'])}）")
-            else:
-                st.info(f"❌ 不的中: {combo}")
-
-    st.markdown("---")
-
-    # ── 的中率統計 ───────────────────────────────────────────────
-    st.markdown("### 📊 累積的中率")
-    stats = get_accuracy_stats()
-    if stats["total"] == 0:
-        st.caption("結果がまだ記録されていません")
-    else:
-        s_col1, s_col2 = st.columns(2)
-        s_col1.metric("記録済みレース", stats["total"])
-        s_col2.metric("3連単的中", stats["hits"])
-        st.metric("的中率", f"{stats['hit_rate']:.1f}%")
-
-        if stats["by_type"]:
-            st.caption("▼ タイプ別")
-            for t, v in stats["by_type"].items():
-                st.markdown(
-                    f'<div class="stat-box">'
-                    f'<b>{t}</b>: {v["hit"]}/{v["total"]}件 '
-                    f'({v["rate"]:.1f}%)</div>',
-                    unsafe_allow_html=True
-                )
-
-        if stats["by_confidence"]:
-            st.caption("▼ 信頼度別")
-            for c_key, v in stats["by_confidence"].items():
-                st.markdown(
-                    f'<div class="stat-box">'
-                    f'信頼度 <b>{c_key}</b>: {v["hit"]}/{v["total"]}件 '
-                    f'({v["rate"]:.1f}%)</div>',
-                    unsafe_allow_html=True
-                )
-
-    st.markdown("---")
-
-    # ── ML最適化セクション ─────────────────────────────────────────
-    st.markdown("### 🤖 ML最適化")
-    bt_data = load_backtest_data()
-    if bt_data:
-        dates = sorted(set(e["date"] for e in bt_data))
-        st.caption(f"バックテストデータ: {len(bt_data)}レース ({len(dates)}日分)")
-        st.caption(f"期間: {dates[0]} 〜 {dates[-1]}")
-    else:
-        st.caption("バックテストデータなし（先にデータを収集してください）")
-
-    with st.expander("📥 過去データ収集", expanded=False):
-        bt_days = st.number_input("収集日数", 7, 90, 30, key="bt_days")
-        bt_delay = st.number_input("リクエスト間隔(秒)", 0.5, 5.0, 1.0, step=0.5, key="bt_delay")
-        if st.button("過去データ収集開始", use_container_width=True):
-            with st.status("データ収集中...", expanded=True) as status:
-                prog_text = st.empty()
-                prog_bar = st.progress(0)
-
-                def _on_collect_progress(current, total, msg):
-                    if total > 0:
-                        prog_bar.progress(min(current / total, 1.0))
-                    prog_text.text(msg)
-
-                collect_historical_data(
-                    days=int(bt_days), delay=float(bt_delay),
-                    progress_callback=_on_collect_progress,
-                )
-                status.update(label="収集完了！", state="complete")
-            st.rerun()
-
-    if bt_data and len(bt_data) >= 10:
-        with st.expander("🧠 重み最適化", expanded=False):
-            bt_iter = st.number_input("イテレーション数", 50, 1000, 300, key="bt_iter")
-            if st.button("最適化実行", use_container_width=True, type="primary"):
-                with st.status("最適化中...", expanded=True) as status:
-                    opt_text = st.empty()
-                    opt_bar = st.progress(0)
-
-                    def _on_opt_progress(current, total, msg):
-                        if total > 0:
-                            opt_bar.progress(min(current / total, 1.0))
-                        opt_text.text(msg)
-
-                    ml_res = optimize_from_backtest(
-                        max_iter=int(bt_iter),
-                        progress_callback=_on_opt_progress,
-                    )
-                    status.update(label="最適化完了！", state="complete")
-                if ml_res:
-                    st.session_state.ml_result = ml_res
-
-        if "ml_result" in st.session_state and st.session_state.ml_result:
-            r = st.session_state.ml_result
-            st.metric(
-                "スコア改善",
-                f"{r['hit_rate']:.4f}",
-                delta=f"{r['improvement']:+.4f}",
-            )
-            bd = r.get("baseline_details", {})
-            od = r.get("optimized_details", {})
-            if bd and od:
-                st.caption(
-                    f"3連単的中: {bd['hits']}→{od['hits']}件 / "
-                    f"1着率: {bd['top1_rate']:.1f}%→{od['top1_rate']:.1f}%"
-                )
-            if st.button("✅ config.pyに反映", type="primary", use_container_width=True):
-                apply_to_config(r["optimized_weights"])
-                st.success("config.py を更新しました！次回予想から新しい重みが適用されます。")
-                st.session_state.ml_result = None
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
-    with st.spinner("データを取得中..."):
-        d_str = race_date.strftime("%Y%m%d")
-        if use_sample:
-            df_raw, weather = generate_sample_data(race_no)
-            deadline = "19:44"
-            odds     = {}
-            odds_2t  = {}
-            odds_2f  = {}
-            taka     = {"available": False}
-        else:
-            df_raw, weather = fetch_full_race_data(race_no, d_str, extended=use_extended)
-            deadline = fetch_deadline(race_no, d_str)
-            odds     = fetch_odds_3t(race_no, d_str)
-            odds_2tf = fetch_odds_2tf(race_no, d_str)
-            odds_2t  = odds_2tf.get("2連単", {})
-            odds_2f  = odds_2tf.get("2連複", {})
-            taka     = fetch_gamagori_taka(race_no, d_str)
+    d_str = race_date.strftime("%Y%m%d")
+    progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
-        if not df_raw.empty:
-            result = predict(
-                df_raw, weather, race_no,
-                taka_data=taka, odds_dict=odds,
-                odds_2t=odds_2t, odds_2f=odds_2f,
-            )
-            st.session_state.result   = result
-            st.session_state.weather  = weather
-            st.session_state.deadline = deadline
-            st.session_state.race_no  = race_no
-            st.session_state.date_str = d_str
-            st.session_state.odds     = odds
-            st.session_state.odds_2t  = odds_2t
-            st.session_state.odds_2f  = odds_2f
-            st.session_state.taka     = taka
+    # 独立した7つのデータ取得を並列実行
+    with ThreadPoolExecutor(max_workers=7) as executor:
+        f_data     = executor.submit(fetch_full_race_data, race_no, d_str, True)
+        f_deadline = executor.submit(fetch_deadline, race_no, d_str)
+        f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
+        f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
+        f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str)
+        f_kimarite = executor.submit(fetch_venue_kimarite)
+        f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str)
 
-            confidence = (
-                result["scored_df"]["confidence"].iloc[0]
-                if "confidence" in result["scored_df"].columns else "-"
-            )
-            save_prediction(d_str, race_no, result["recommendations"], weather, confidence)
+        futures_map = {
+            f_data:     "出走表・直前データ",
+            f_deadline: "締切時刻",
+            f_odds:     "3連単オッズ",
+            f_odds_2tf: "2連単/複オッズ",
+            f_taka:     "高橋アナ予想",
+            f_kimarite: "決まり手データ",
+            f_racer_km: "選手別決まり手",
+        }
+        done_count = 0
+        total_tasks = len(futures_map)
+        for future in as_completed(futures_map):
+            done_count += 1
+            name = futures_map[future]
+            pct = int((done_count / total_tasks) * 60)
+            progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})")
 
-            odds_msg_parts = []
-            if odds:
-                odds_msg_parts.append(f"3連単 {len(odds)}通り")
-            if odds_2t:
-                odds_msg_parts.append(f"2連単 {len(odds_2t)}通り")
-            if odds_2f:
-                odds_msg_parts.append(f"2連複 {len(odds_2f)}通り")
-            if odds_msg_parts:
-                st.success(f"オッズ取得: {' / '.join(odds_msg_parts)}")
-            else:
-                st.info("オッズはまだ未公開か取得できませんでした（締切前に再実行すると表示されます）")
-            if taka and taka.get("available"):
-                boats_str = "・".join(taka.get("yoso_boats", [])) or "—"
-                st.success(f"高橋アナ予想取得！ 予想艇: {boats_str}")
-            else:
-                st.info("高橋アナ予想は未公開またはデータ取得外です（レース直前に再実行すると反映されます）")
-        else:
-            st.error("データが取得できませんでした。開催時間外の可能性があります。")
+        df_raw, weather = f_data.result()
+        deadline = f_deadline.result()
+        odds     = f_odds.result()
+        odds_2tf = f_odds_2tf.result()
+        taka     = f_taka.result()
+        kimarite_raw = f_kimarite.result()
+        racer_km = f_racer_km.result()
+
+    odds_2t = odds_2tf.get("2連単", {})
+    odds_2f = odds_2tf.get("2連複", {})
+
+    # 決まり手データ: スクレイピング失敗時はデフォルト値にフォールバック
+    from config import GAMAGORI_KIMARITE_DEFAULT
+    kimarite = kimarite_raw if kimarite_raw else GAMAGORI_KIMARITE_DEFAULT
+
+    if not df_raw.empty:
+        progress_bar.progress(70, text="🧠 AI予想を計算中...")
+        result = predict(
+            df_raw, weather, race_no,
+            taka_data=taka, odds_dict=odds,
+            odds_2t=odds_2t, odds_2f=odds_2f,
+            kimarite_data=kimarite,
+            racer_kimarite=racer_km,
+        )
+
+        progress_bar.progress(90, text="💾 予想結果を保存中...")
+        st.session_state.result   = result
+        st.session_state.weather  = weather
+        st.session_state.deadline = deadline
+        st.session_state.race_no  = race_no
+        st.session_state.date_str = d_str
+        st.session_state.odds     = odds
+        st.session_state.odds_2t  = odds_2t
+        st.session_state.odds_2f  = odds_2f
+        st.session_state.taka     = taka
+        st.session_state.racer_km = racer_km
+        st.session_state.kimarite = kimarite
+
+        confidence = (
+            result["scored_df"]["confidence"].iloc[0]
+            if "confidence" in result["scored_df"].columns else "-"
+        )
+        save_prediction(d_str, race_no, result["recommendations"], weather, confidence)
+
+        progress_bar.progress(100, text="✅ 予想完了！")
+        time.sleep(1)
+        progress_bar.empty()
+
+        # サイドバーを自動的に閉じる
+        components.html(
+            """
+            <script>
+                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                if (sidebar) {
+                    const btn = sidebar.querySelector('button[kind="header"]');
+                    if (btn) btn.click();
+                }
+            </script>
+            """,
+            height=0,
+        )
+
+    else:
+        progress_bar.progress(100, text="❌ データ取得失敗")
+        time.sleep(1)
+        progress_bar.empty()
+        st.error("データが取得できませんでした。開催時間外の可能性があります。")
 
 # ── 結果表示 ─────────────────────────────────────────────────────
 if st.session_state.result is not None:
@@ -342,29 +355,44 @@ if st.session_state.result is not None:
 
     st.markdown("---")
 
-    # ── 分析データテーブル ────────────────────────────────────────
+    # ── 締め切り時刻 ──────────────────────────────────────────────
     rno = st.session_state.race_no
+    deadline = st.session_state.deadline or "-"
+    remaining_html = ""
+    urgent = False
 
-    # モバイル向け: 主要列のみのコンパクト表示をデフォルト、全列は折りたたみ
-    mobile_cols_raw = ["枠番", "選手名", "全国勝率", "蒲郡勝率", "展示タイム", "win_prob"]
-    mobile_cols = [c for c in mobile_cols_raw if c in scored.columns]
+    if deadline != "-":
+        try:
+            now   = datetime.now()
+            dl_dt = datetime.strptime(f"{now.strftime('%Y-%m-%d')} {deadline}", "%Y-%m-%d %H:%M")
+            diff_sec = (dl_dt - now).total_seconds()
+            if diff_sec < 0:
+                remaining_html = '<span class="deadline-remaining ok">締切済み</span>'
+            else:
+                diff_min = int(diff_sec // 60)
+                diff_s   = int(diff_sec % 60)
+                urgent   = diff_min < 5
+                css_cls  = "urgent" if urgent else "ok"
+                remaining_html = (
+                    f'<span class="deadline-remaining {css_cls}">'
+                    f'あと {diff_min}分{diff_s:02d}秒</span>'
+                )
+        except Exception:
+            pass
 
-    mobile_rename = {"win_prob": "1着確率(%)", "展示タイム": "展示T"}
-    mobile_df = scored[mobile_cols].rename(columns=mobile_rename)
-    mobile_fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "蒲郡勝率": "{:.2f}"}
-    if "展示T" in mobile_df.columns:
-        mobile_fmt["展示T"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
+    box_cls = "deadline-box deadline-urgent" if urgent else "deadline-box"
+    st.markdown(
+        f'<div class="{box_cls}">'
+        f'<div class="deadline-label">⏰ 締切予定時刻</div>'
+        f'<div class="deadline-time">{deadline}</div>'
+        f'{remaining_html}'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
+    # ── 分析データテーブル ────────────────────────────────────────
     st.markdown(f"### 📋 {rno}R 分析データ")
 
-    def style_prob_row(row, df):
-        is_max = row["1着確率(%)"] == df["1着確率(%)"].max()
-        return ["background-color: rgba(240,165,0,0.15)" if is_max else ""] * len(row)
-
-    styled_mobile = mobile_df.style.apply(style_prob_row, df=mobile_df, axis=1).format(mobile_fmt)
-    st.dataframe(styled_mobile, use_container_width=True, hide_index=True)
-
-    # 全データは折りたたみの中に
     base_cols  = ["枠番", "選手名", "級別"]
     extra_cols = []
     if "進入コース" in scored.columns:
@@ -375,13 +403,17 @@ if st.session_state.result is not None:
     base_cols += ["全国勝率", "蒲郡勝率"]
     if "モーター2連率" in scored.columns:
         extra_cols.append("モーター2連率")
-    base_cols += ["展示タイム", "チルト"]
     if "スタートタイミング" in scored.columns:
         extra_cols.append("スタートタイミング")
-    for col in ["まわり足タイム", "直線タイム", "一周タイム", "コース別1着率", "直近平均着順"]:
+    for col in ["コース別1着率", "直近平均着順"]:
         if col in scored.columns:
             extra_cols.append(col)
-    base_cols += ["win_prob", "highlight_reason"]
+    # 展示情報をグループ化（展示タイム・まわり足・直線T・一周T）
+    base_cols += ["展示タイム"]
+    for col in ["まわり足タイム", "直線タイム", "一周タイム"]:
+        if col in scored.columns:
+            base_cols.append(col)
+    base_cols += ["チルト", "win_prob", "highlight_reason"]
 
     display_cols = base_cols[:3] + extra_cols + base_cols[3:]
     seen = set()
@@ -427,50 +459,194 @@ if st.session_state.result is not None:
     if "F" in display_df.columns:
         fmt["F"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "0"
 
-    with st.expander("📊 全データ表示", expanded=False):
-        def style_row(row):
-            is_max = row["1着確率(%)"] == display_df["1着確率(%)"].max()
-            return ["background-color: rgba(240,165,0,0.15)" if is_max else ""] * len(row)
+    def style_row(row):
+        is_max = row["1着確率(%)"] == display_df["1着確率(%)"].max()
+        return ["background-color: rgba(240,165,0,0.15)" if is_max else ""] * len(row)
 
-        styled = display_df.style.apply(style_row, axis=1).format(fmt)
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+    # 展示情報の列名リスト
+    _EXHIBIT_COLS = ["展示タイム", "まわり足", "直線T", "一周T"]
 
-    # ── 締め切り時刻 ──────────────────────────────────────────────
-    st.markdown("### 🎯 推奨3連単")
-    deadline = st.session_state.deadline or "-"
-    remaining_html = ""
-    urgent = False
+    def _style_exhibit_rank(col):
+        """展示列の1位(赤)・2位(黄)を色付け"""
+        styles = [""] * len(col)
+        valid = col[(col > 0) & col.notnull()]
+        if len(valid) >= 2:
+            sorted_vals = valid.sort_values()
+            top1, top2 = sorted_vals.iloc[0], sorted_vals.iloc[1]
+            for i, v in enumerate(col):
+                if pd.notnull(v) and v > 0:
+                    if v == top1:
+                        styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
+                    elif v == top2:
+                        styles[i] = "background-color: rgba(241,196,15,0.35); color: #fff; font-weight: bold"
+        elif len(valid) == 1:
+            top1 = valid.iloc[0]
+            for i, v in enumerate(col):
+                if pd.notnull(v) and v > 0 and v == top1:
+                    styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
+        return styles
 
-    if deadline != "-":
-        try:
-            now   = datetime.now()
-            dl_dt = datetime.strptime(f"{now.strftime('%Y-%m-%d')} {deadline}", "%Y-%m-%d %H:%M")
-            diff_sec = (dl_dt - now).total_seconds()
-            if diff_sec < 0:
-                remaining_html = '<span class="deadline-remaining ok">締切済み</span>'
-            else:
-                diff_min = int(diff_sec // 60)
-                diff_s   = int(diff_sec % 60)
-                urgent   = diff_min < 5
-                css_cls  = "urgent" if urgent else "ok"
-                remaining_html = (
-                    f'<span class="deadline-remaining {css_cls}">'
-                    f'あと {diff_min}分{diff_s:02d}秒</span>'
-                )
-        except Exception:
-            pass
+    styler = display_df.style.apply(style_row, axis=1)
 
-    box_cls = "deadline-box deadline-urgent" if urgent else "deadline-box"
+    # 展示情報列に1位/2位ハイライト適用
+    for ecol in _EXHIBIT_COLS:
+        if ecol in display_df.columns:
+            styler = styler.apply(_style_exhibit_rank, subset=[ecol])
+
+    # テーブル全体スタイル
+    tbl_css = [
+        {"selector": "", "props": [("border-collapse", "collapse"), ("width", "100%")]},
+        {"selector": "th", "props": [
+            ("background-color", "#1a2744"), ("color", "#e8f4ff"),
+            ("padding", "8px 6px"), ("text-align", "center"),
+            ("font-size", "0.78rem"), ("border-bottom", "2px solid #1e5fa8"),
+            ("white-space", "nowrap"),
+        ]},
+        {"selector": "td", "props": [
+            ("padding", "6px 4px"), ("text-align", "center"),
+            ("color", "#e8f4ff"), ("border-bottom", "1px solid rgba(30,95,168,0.3)"),
+            ("font-size", "0.8rem"), ("white-space", "nowrap"),
+        ]},
+    ]
+    styler = styler.set_table_styles(tbl_css)
+
+    styled = styler.format(fmt).hide(axis="index")
+    tbl_html = styled.to_html()
+
+    # 展示列ヘッダーにインラインスタイルを直接注入
+    _EXHIBIT_HDR_STYLE = "background-color:#0a6e5c !important;color:#5dffe0 !important;font-weight:bold"
+    for ecol in _EXHIBIT_COLS:
+        if ecol in display_df.columns:
+            tbl_html = tbl_html.replace(
+                f">{ecol}</th>",
+                f' style="{_EXHIBIT_HDR_STYLE}">{ecol}</th>',
+            )
+
     st.markdown(
-        f'<div class="{box_cls}">'
-        f'<div class="deadline-label">⏰ 締切予定時刻</div>'
-        f'<div class="deadline-time">{deadline}</div>'
-        f'{remaining_html}'
-        f'</div>',
-        unsafe_allow_html=True
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">{tbl_html}</div>',
+        unsafe_allow_html=True,
     )
 
+    # ── 蒲郡コース別決まり手 ────────────────────────────────────────
+    venue_km = st.session_state.kimarite or {}
+    if venue_km:
+        with st.expander("🏟️ 蒲郡コース別決まり手（直近3ヶ月）", expanded=False):
+            _VK_COLORS = {
+                "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
+                "まくり差し": "#2ecc71", "抜き": "#9b59b6", "恵まれ": "#95a5a6",
+            }
+            _VK_FRAME_BG = {"1": "#fff", "2": "#000", "3": "#e74c3c",
+                            "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
+            _VK_FRAME_FG = {"1": "#000", "2": "#fff", "3": "#fff",
+                            "4": "#fff", "5": "#000", "6": "#fff"}
+            for course in sorted(venue_km.keys()):
+                km = venue_km[course]
+                cs = str(course)
+                fbg = _VK_FRAME_BG.get(cs, "#666")
+                ffg = _VK_FRAME_FG.get(cs, "#fff")
+                fborder = "border:1.5px solid #888;" if cs == "1" else ""
+                first_rate = km.get("1着率", 0.0)
+
+                bars_html = ""
+                for kt_name in ["逃げ", "差し", "まくり", "まくり差し", "抜き", "恵まれ"]:
+                    pct = km.get(kt_name, 0.0)
+                    if pct <= 0:
+                        continue
+                    color = _VK_COLORS.get(kt_name, "#888")
+                    bars_html += (
+                        f'<div style="display:flex;align-items:center;margin:1px 0">'
+                        f'<span style="color:#7ab8e8;font-size:0.7rem;width:55px;text-align:right;'
+                        f'margin-right:6px">{kt_name}</span>'
+                        f'<div style="flex:1;background:#1a2744;border-radius:3px;height:14px;overflow:hidden">'
+                        f'<div style="width:{min(pct, 100):.1f}%;height:100%;background:{color};'
+                        f'border-radius:3px"></div></div>'
+                        f'<span style="color:#fff;font-size:0.72rem;width:42px;text-align:right;'
+                        f'margin-left:6px">{pct:.1f}%</span>'
+                        f'</div>'
+                    )
+
+                st.markdown(
+                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:6px;'
+                    f'padding:8px 10px;margin:4px 0">'
+                    f'<div style="display:flex;align-items:center;margin-bottom:4px">'
+                    f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                    f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
+                    f'width:22px;height:22px;font-weight:bold;font-size:0.8rem;margin-right:6px">'
+                    f'{cs}</span>'
+                    f'<span style="color:#fff;font-weight:bold;font-size:0.85rem">{cs}コース</span>'
+                    f'<span style="color:#7ab8e8;font-size:0.7rem;margin-left:auto">'
+                    f'1着率 {first_rate:.1f}%</span>'
+                    f'</div>'
+                    f'{bars_html}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── 選手別決まり手 ────────────────────────────────────────────
+    racer_km = st.session_state.racer_km or {}
+    if racer_km:
+        with st.expander("🎯 選手別決まり手（コース別）", expanded=False):
+            _KIMARITE_COLORS = {
+                "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
+                "まくり差し": "#2ecc71", "抜き": "#9b59b6", "恵まれ": "#95a5a6",
+            }
+            for _, row in scored.iterrows():
+                frame = str(row["枠番"])
+                rk = racer_km.get(frame)
+                if not rk:
+                    continue
+                name = row.get("選手名", "")
+                num = rk.get("レース数", 0)
+                # 枠番色
+                _FRAME_BG = {"1": "#fff", "2": "#000", "3": "#e74c3c",
+                             "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
+                _FRAME_FG = {"1": "#000", "2": "#fff", "3": "#fff",
+                             "4": "#fff", "5": "#000", "6": "#fff"}
+                fbg = _FRAME_BG.get(frame, "#666")
+                ffg = _FRAME_FG.get(frame, "#fff")
+                fborder = "border:1.5px solid #888;" if frame == "1" else ""
+
+                # 決まり手バーを構築
+                bars_html = ""
+                for kt_name in ["逃げ", "差し", "まくり", "まくり差し", "抜き", "恵まれ"]:
+                    pct = rk.get(kt_name, 0.0)
+                    if pct <= 0:
+                        continue
+                    color = _KIMARITE_COLORS.get(kt_name, "#888")
+                    bars_html += (
+                        f'<div style="display:flex;align-items:center;margin:1px 0">'
+                        f'<span style="color:#7ab8e8;font-size:0.7rem;width:55px;text-align:right;'
+                        f'margin-right:6px">{kt_name}</span>'
+                        f'<div style="flex:1;background:#1a2744;border-radius:3px;height:14px;overflow:hidden">'
+                        f'<div style="width:{min(pct, 100):.1f}%;height:100%;background:{color};'
+                        f'border-radius:3px"></div></div>'
+                        f'<span style="color:#fff;font-size:0.72rem;width:42px;text-align:right;'
+                        f'margin-left:6px">{pct:.1f}%</span>'
+                        f'</div>'
+                    )
+
+                st.markdown(
+                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:6px;'
+                    f'padding:8px 10px;margin:4px 0">'
+                    f'<div style="display:flex;align-items:center;margin-bottom:4px">'
+                    f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                    f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
+                    f'width:22px;height:22px;font-weight:bold;font-size:0.8rem;margin-right:6px">'
+                    f'{frame}</span>'
+                    f'<span style="color:#fff;font-weight:bold;font-size:0.85rem">{name}</span>'
+                    f'<span style="color:#7ab8e8;font-size:0.7rem;margin-left:auto">'
+                    f'{num}走</span>'
+                    f'</div>'
+                    f'{bars_html}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+    else:
+        with st.expander("🎯 選手別決まり手（コース別）", expanded=False):
+            st.caption("選手別決まり手データを取得できませんでした")
+
     # ── 買い目カード（3グループ × 3点） ─────────────────────────
+    st.markdown("### 🎯 推奨3連単")
     recs = res["recommendations"]
     if not recs:
         st.warning("買い目候補がありません")
@@ -876,27 +1052,68 @@ if st.session_state.result is not None:
 
     st.markdown("---")
 
-    # ── 直近予想履歴 ──────────────────────────────────────────────
-    with st.expander("📜 直近予想履歴（直近10件）", expanded=False):
-        recent = get_recent_predictions(10)
-        if not recent:
-            st.caption("履歴がありません")
-        else:
-            rows = []
-            for e in recent:
-                actual  = e.get("actual") or {}
-                hit_str = (
-                    "的中 " + ", ".join(actual.get("hit", []))
-                    if actual.get("hit")
-                    else ("不的中" if actual else "未記録")
+    # ── 予想パラメータ一覧 ────────────────────────────────────────
+    with st.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
+        from config import SCORE_WEIGHTS as _W, GAMAGORI_SETTINGS as _G
+
+        param_groups = [
+            ("コース・勝率", [
+                ("コース基礎確率", f'{_W["course_base"]}'),
+                ("全国勝率の重み", f'{_W["win_rate"]}'),
+                ("蒲郡勝率の重み", f'{_W["local_win_rate"]}'),
+                ("全国2連率の重み", f'{_W["nat2_rate"]}'),
+                ("蒲郡2連率の重み", f'{_W["loc2_rate"]}'),
+                ("コース別1着率の重み", f'{_W["course_win_rate"]}'),
+            ]),
+            ("展示・機力", [
+                ("展示タイム偏差の重み", f'{_W["exhibit_time"]}'),
+                ("展示1位ボーナス", f'{_W["exhibit_top_bonus"]}'),
+                ("モーター2連率の重み", f'{_W["motor2_rate"]}'),
+                ("ボート2連率の重み", f'{_W["boat2_rate"]}'),
+                ("まわり足タイムの重み", f'{_W["mawari_time"]}'),
+                ("直線タイムの重み", f'{_W["chokusen_time"]}'),
+                ("一周タイムの重み", f'{_W["lap_time"]}'),
+                ("ターン巧者ボーナス", f'{_W["turn_master_bonus"]}'),
+            ]),
+            ("スタート", [
+                ("STの重み", f'{_W["st_weight"]}'),
+                ("フライングペナルティ", f'{_W["st_fly_penalty"]}'),
+                ("F持ちペナルティ", f'{_W["fl_f_penalty"]}'),
+                ("L持ちペナルティ", f'{_W["fl_l_penalty"]}'),
+            ]),
+            ("気象・コンディション", [
+                ("ナイター補正（1号艇）", f'{_W["night_boost"]}'),
+                ("静水面イン加点", f'{_W["calm_in_boost"]}'),
+                ("カドまくり補正（4号艇）", f'{_W["kado_boost"]}'),
+                ("まくり差し補正（3号艇）", f'{_W["makuri_sashi"]}'),
+                ("体重（静水面）ボーナス", f'{_W["weight_calm"]}'),
+                ("体重（荒天）ボーナス", f'{_W["weight_rough"]}'),
+                ("無風判定閾値", f'{_G["calm_wind_threshold"]}m'),
+                ("ナイター開始R", f'{_G["night_race_start"]}R以降'),
+            ]),
+            ("モデル・予想生成", [
+                ("直近成績モメンタムの重み", f'{_W["momentum"]}'),
+                ("優勝戦イン強化", f'{_W["grade_final_boost"]}'),
+                ("高橋アナ予想ブースト", f'{_W["taka_boost"]}'),
+                ("選手別決まり手適合度の重み", f'{_W.get("racer_kimarite_weight", 3.0)}'),
+                ("Henery gamma", f'{_W["henery_gamma"]}'),
+                ("期待値閾値（穴選定）", f'{_W["ev_threshold"]}'),
+                ("展開連動パターン強度", f'{_W.get("tenkai_rendo_strength", 0.0)}'),
+            ]),
+        ]
+
+        for group_name, params in param_groups:
+            st.markdown(
+                f'<div style="color:#f0a500;font-size:0.85rem;font-weight:bold;'
+                f'margin-top:0.6rem;margin-bottom:0.3rem">{group_name}</div>',
+                unsafe_allow_html=True,
+            )
+            for name, value in params:
+                st.markdown(
+                    f'<div style="background:#1a2744;border-left:3px solid #2a4a80;'
+                    f'padding:4px 10px;margin:2px 0;border-radius:4px;font-size:0.8rem">'
+                    f'<span style="color:#7ab8e8">{name}</span>'
+                    f'<span style="color:#fff;float:right">{value}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
-                top_rec = e["recommendations"][0]["買い目"] if e.get("recommendations") else "-"
-                rows.append({
-                    "日付":     e["date"],
-                    "R":        e["race_no"],
-                    "本命買い目": top_rec,
-                    "実結果":   actual.get("三連単", "-"),
-                    "判定":     hit_str,
-                    "信頼度":   e.get("confidence", "-"),
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)

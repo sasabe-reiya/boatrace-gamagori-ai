@@ -113,6 +113,7 @@ def calculate_scores(
     weather: dict,
     race_no: int,
     taka_data: dict | None = None,
+    racer_kimarite: dict | None = None,
 ) -> pd.DataFrame:
     df = df.copy()
     n = len(df)
@@ -404,6 +405,42 @@ def calculate_scores(
                     momentum += (recent_wr[i] / 100.0 - 0.15) * 2.0
                 scores[i] += momentum * W.get("momentum", 2.5)
 
+    # ── Step 8d: 選手別決まり手適合度 【v5新規】 ─────────────────
+    # 各選手のコース別決まり手傾向と、蒲郡のコース特性を比較して
+    # 得意決まり手が合致する選手にボーナスを付与する。
+    if racer_kimarite:
+        # コース別の主要決まり手パターン（各コースで有効な決まり手とその基準ウェイト）
+        _COURSE_KIMARITE_WEIGHT = {
+            1: {"逃げ": 1.0},
+            2: {"差し": 0.6, "まくり": 0.4},
+            3: {"まくり差し": 0.5, "まくり": 0.3, "差し": 0.2},
+            4: {"まくり": 0.5, "まくり差し": 0.3, "差し": 0.2},
+            5: {"まくり差し": 0.6, "まくり": 0.3, "差し": 0.1},
+            6: {"まくり差し": 0.5, "まくり": 0.4, "差し": 0.1},
+        }
+        frames_str = df["枠番"].astype(str).values
+        rk_weight = W.get("racer_kimarite_weight", 3.0)
+
+        for i in range(n):
+            frame = frames_str[i]
+            rk = racer_kimarite.get(frame)
+            if not rk or rk.get("レース数", 0) < 5:
+                continue
+
+            ci = course_positions[i] + 1  # 1-indexed
+            patterns = _COURSE_KIMARITE_WEIGHT.get(ci, {})
+            if not patterns:
+                continue
+
+            # 適合度 = 選手の得意決まり手率 × コースパターン重み の加重和
+            fit_score = 0.0
+            for kimarite_name, weight in patterns.items():
+                racer_pct = rk.get(kimarite_name, 0.0) / 100.0
+                fit_score += racer_pct * weight
+
+            # fit_score は 0.0〜1.0。0.5を基準に偏差でスコア調整。
+            scores[i] += (fit_score - 0.3) * rk_weight
+
     # ── Step 9: レース番号・グレード特性補正 【v3拡張】 ────────────
     grade    = weather.get("grade", "一般")
     is_final = weather.get("is_final", False)
@@ -453,6 +490,7 @@ def calculate_scores(
         df, weather, race_no, scores, probs,
         is_calm, is_night, wind_dir, wind_speed,
         wave_height, water_temp, course_positions,
+        racer_kimarite=racer_kimarite,
     )
 
     df["score"]            = scores.round(2)
@@ -513,6 +551,7 @@ def _build_reasons(
     df, weather, race_no, scores, probs,
     is_calm, is_night, wind_dir, wind_speed,
     wave_height, water_temp, course_positions,
+    racer_kimarite=None,
 ):
     reasons = []
     n = len(df)
@@ -666,6 +705,20 @@ def _build_reasons(
             elif recent_avg[i] >= 4.5:
                 r.append(f"不調(直近平均{recent_avg[i]:.1f}着)")
 
+        # 【v5追加】選手別決まり手
+        if racer_kimarite:
+            frames_str = df["枠番"].astype(str).values
+            rk = racer_kimarite.get(frames_str[i])
+            if rk and rk.get("レース数", 0) >= 5:
+                # 最も得意な決まり手を表示
+                kimarite_items = [
+                    (rk.get("逃げ", 0), "逃げ"), (rk.get("差し", 0), "差し"),
+                    (rk.get("まくり", 0), "まくり"), (rk.get("まくり差し", 0), "まくり差し"),
+                ]
+                best_kt = max(kimarite_items, key=lambda x: x[0])
+                if best_kt[0] >= 30:
+                    r.append(f"得意:{best_kt[1]}({best_kt[0]:.0f}%/{rk['レース数']}走)")
+
         reasons.append(" / ".join(r) if r else "—")
     return reasons
 
@@ -701,15 +754,142 @@ def _henery_joint_prob(ability: np.ndarray, i: int, j: int, k: int, gamma: float
 
 
 # ────────────────────────────────────────────────────────────────
-# 推奨買い目生成（強化版 v3）
+# 展開連動パターン modifier 【v4新規】
+# ────────────────────────────────────────────────────────────────
+
+def _get_tenkai_modifier(
+    winner_course: int,
+    second_course: int,
+    third_course: int,
+    kimarite_data: dict,
+    strength: float = 0.5,
+) -> float:
+    """
+    展開連動パターンに基づく3連単確率の倍率を返す。
+
+    1着コースの決まり手確率で重み付け平均した2着・3着倍率を算出し、
+    strength でブレンドして返す。
+
+    Parameters
+    ----------
+    winner_course : 1着のコース番号 (1-6)
+    second_course : 2着のコース番号 (1-6)
+    third_course  : 3着のコース番号 (1-6)
+    kimarite_data : fetch_venue_kimarite() の返値 or GAMAGORI_KIMARITE_DEFAULT
+    strength      : 適用強度 (0.0=無効, 1.0=フル適用)
+
+    Returns
+    -------
+    倍率 (float)。1.0 = 変化なし。
+    """
+    if strength <= 0.0 or not kimarite_data:
+        return 1.0
+
+    from config import TENKAI_RENDO_PATTERNS
+
+    course_data = kimarite_data.get(winner_course)
+    if not course_data:
+        return 1.0
+
+    kimarite_types = ["逃げ", "まくり", "差し", "まくり差し"]
+    total_weight = 0.0
+    weighted_modifier = 0.0
+
+    for kt in kimarite_types:
+        kt_prob = course_data.get(kt, 0.0) / 100.0
+        if kt_prob <= 0:
+            continue
+
+        pattern = TENKAI_RENDO_PATTERNS.get((winner_course, kt))
+        if not pattern:
+            total_weight += kt_prob
+            weighted_modifier += kt_prob * 1.0
+            continue
+
+        mod_2nd = pattern.get("2nd", {}).get(second_course, 1.0)
+        mod_3rd = pattern.get("3rd", {}).get(third_course, 1.0)
+        combined = mod_2nd * mod_3rd
+
+        total_weight += kt_prob
+        weighted_modifier += kt_prob * combined
+
+    if total_weight <= 0:
+        return 1.0
+
+    raw_modifier = weighted_modifier / total_weight
+    effective = 1.0 + (raw_modifier - 1.0) * strength
+    return max(effective, 0.1)
+
+
+def _get_tenkai_modifier_2ren(
+    winner_course: int,
+    second_course: int,
+    kimarite_data: dict,
+    strength: float = 0.5,
+) -> float:
+    """2連系用: 2着の展開連動倍率のみ返す（3着不問）。"""
+    if strength <= 0.0 or not kimarite_data:
+        return 1.0
+
+    from config import TENKAI_RENDO_PATTERNS
+
+    course_data = kimarite_data.get(winner_course)
+    if not course_data:
+        return 1.0
+
+    kimarite_types = ["逃げ", "まくり", "差し", "まくり差し"]
+    total_weight = 0.0
+    weighted_modifier = 0.0
+
+    for kt in kimarite_types:
+        kt_prob = course_data.get(kt, 0.0) / 100.0
+        if kt_prob <= 0:
+            continue
+
+        pattern = TENKAI_RENDO_PATTERNS.get((winner_course, kt))
+        if not pattern:
+            total_weight += kt_prob
+            weighted_modifier += kt_prob * 1.0
+            continue
+
+        mod_2nd = pattern.get("2nd", {}).get(second_course, 1.0)
+        total_weight += kt_prob
+        weighted_modifier += kt_prob * mod_2nd
+
+    if total_weight <= 0:
+        return 1.0
+
+    raw_modifier = weighted_modifier / total_weight
+    effective = 1.0 + (raw_modifier - 1.0) * strength
+    return max(effective, 0.1)
+
+
+def _build_course_list(df_scored: pd.DataFrame) -> list[int]:
+    """DataFrameの進入コース列からコース番号リスト(1-indexed)を構築する。"""
+    n = len(df_scored)
+    if "進入コース" in df_scored.columns:
+        course_list = []
+        for i in range(n):
+            try:
+                c = int(df_scored.iloc[i]["進入コース"])
+                course_list.append(max(1, min(c, 6)))
+            except (TypeError, ValueError):
+                course_list.append(i + 1)
+        return course_list
+    return [i + 1 for i in range(n)]
+
+
+# ────────────────────────────────────────────────────────────────
+# 推奨買い目生成（強化版 v4: 展開連動パターン対応）
 # ────────────────────────────────────────────────────────────────
 
 def generate_recommendations(
     df_scored: pd.DataFrame,
     odds_dict: dict | None = None,
+    kimarite_data: dict | None = None,
 ) -> list[dict]:
     """
-    Henery結合確率で3連単スコアを計算。
+    Henery結合確率で3連単スコアを計算。展開連動パターンで補正。
     本命3点・対抗3点は確率順、穴3点は期待値ベースで選定。
     """
     if df_scored.empty or "win_prob" not in df_scored.columns:
@@ -723,6 +903,9 @@ def generate_recommendations(
     n      = len(ability)
     gamma  = W.get("henery_gamma", 0.85)
 
+    tenkai_strength = W.get("tenkai_rendo_strength", 0.0)
+    course_list = _build_course_list(df_scored)
+
     candidates = []
     for i in range(n):
         for j in range(n):
@@ -732,6 +915,15 @@ def generate_recommendations(
                 if k == i or k == j:
                     continue
                 joint = _henery_joint_prob(ability, i, j, k, gamma)
+
+                # 展開連動パターン補正
+                if kimarite_data and tenkai_strength > 0:
+                    modifier = _get_tenkai_modifier(
+                        course_list[i], course_list[j], course_list[k],
+                        kimarite_data, tenkai_strength,
+                    )
+                    joint *= modifier
+
                 combo = f"{frames[i]}-{frames[j]}-{frames[k]}"
 
                 # 期待値計算（オッズがある場合）
@@ -805,14 +997,16 @@ def generate_2ren_recommendations(
     df_scored: pd.DataFrame,
     odds_2t: dict | None = None,
     odds_2f: dict | None = None,
+    kimarite_data: dict | None = None,
 ) -> dict:
     """
-    2連単・2連複の推奨買い目を生成する。
+    2連単・2連複の推奨買い目を生成する。展開連動パターンで補正。
 
     Parameters
     ----------
     odds_2t : 2連単実オッズ {"1-2": 10.6, ...} or None
     odds_2f : 2連複実オッズ {"1=2": 4.9, ...} or None
+    kimarite_data : 決まり手データ or None
 
     Returns
     -------
@@ -833,7 +1027,10 @@ def generate_2ren_recommendations(
     total  = ability.sum() + 1e-12
     gamma  = W.get("henery_gamma", 0.85)
 
-    # 2連単: Heneryモデルで P(i=1着, j=2着)
+    tenkai_strength = W.get("tenkai_rendo_strength", 0.0)
+    course_list = _build_course_list(df_scored)
+
+    # 2連単: Heneryモデルで P(i=1着, j=2着) + 展開連動補正
     nitan = []
     for i in range(n):
         p1 = ability[i] / total
@@ -844,6 +1041,14 @@ def generate_2ren_recommendations(
                 continue
             p2_cond = a_gamma[j] / rem
             joint = p1 * p2_cond
+
+            if kimarite_data and tenkai_strength > 0:
+                modifier = _get_tenkai_modifier_2ren(
+                    course_list[i], course_list[j],
+                    kimarite_data, tenkai_strength,
+                )
+                joint *= modifier
+
             combo = f"{frames[i]}-{frames[j]}"
             actual_odds = odds_2t.get(combo) if odds_2t else None
             ev = round(actual_odds * joint, 2) if actual_odds is not None else None
@@ -856,7 +1061,7 @@ def generate_2ren_recommendations(
             })
     nitan.sort(key=lambda x: x["的中確率"], reverse=True)
 
-    # 2連複: P(i=1着,j=2着) + P(j=1着,i=2着)
+    # 2連複: P(i=1着,j=2着) + P(j=1着,i=2着) + 展開連動補正
     seen = set()
     nifuku = []
     for i in range(n):
@@ -871,6 +1076,21 @@ def generate_2ren_recommendations(
             rem_i = sum(a_gamma[m] for m in range(n) if m != i) + 1e-12
             rem_j = sum(a_gamma[m] for m in range(n) if m != j) + 1e-12
             joint = p1 * (a_gamma[j] / rem_i) + p2 * (a_gamma[i] / rem_j)
+
+            if kimarite_data and tenkai_strength > 0:
+                mod_ij = _get_tenkai_modifier_2ren(
+                    course_list[i], course_list[j],
+                    kimarite_data, tenkai_strength,
+                )
+                mod_ji = _get_tenkai_modifier_2ren(
+                    course_list[j], course_list[i],
+                    kimarite_data, tenkai_strength,
+                )
+                # 各方向の確率に対応するmodifierで按分
+                joint_i = p1 * (a_gamma[j] / rem_i) * mod_ij
+                joint_j = p2 * (a_gamma[i] / rem_j) * mod_ji
+                joint = joint_i + joint_j
+
             lo, hi = sorted([frames[i], frames[j]])
             combo = f"{lo}={hi}"
             actual_odds = odds_2f.get(combo) if odds_2f else None
@@ -902,10 +1122,12 @@ def predict(
     odds_dict: dict | None = None,
     odds_2t: dict | None = None,
     odds_2f: dict | None = None,
+    kimarite_data: dict | None = None,
+    racer_kimarite: dict | None = None,
 ) -> dict:
-    scored = calculate_scores(df, weather, race_no, taka_data=taka_data)
-    recs   = generate_recommendations(scored, odds_dict=odds_dict)
-    recs_2ren = generate_2ren_recommendations(scored, odds_2t=odds_2t, odds_2f=odds_2f)
+    scored = calculate_scores(df, weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
+    recs   = generate_recommendations(scored, odds_dict=odds_dict, kimarite_data=kimarite_data)
+    recs_2ren = generate_2ren_recommendations(scored, odds_2t=odds_2t, odds_2f=odds_2f, kimarite_data=kimarite_data)
 
     top_boat   = scored.sort_values("win_prob", ascending=False).iloc[0]
     wind_speed = _parse_wind_speed(weather.get("風速", "?"))
