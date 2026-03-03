@@ -474,7 +474,7 @@ def calculate_scores(
                 scores[i] += taka_boost * cs[f]
 
     # ── Step 11: ソフトマックスで確率変換 ────────────────────────
-    temperature = 6.0
+    temperature = 28.0
     exp_s = np.exp((scores - scores.max()) / temperature)
     probs = (exp_s / exp_s.sum()) * 100.0
 

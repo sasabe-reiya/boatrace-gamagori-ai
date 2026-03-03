@@ -740,6 +740,147 @@ if st.session_state.result is not None:
         for r2 in nitan:
             _render_2ren_card(r2, "#f0a500")
 
+    # ── 3連単オッズ一覧表 ────────────────────────────────────────
+    if odds:
+        with st.expander("📊 3連単オッズ一覧", expanded=False):
+            _OBG = {
+                "1": "#fff", "2": "#000", "3": "#e74c3c",
+                "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
+            }
+            _OFG = {
+                "1": "#000", "2": "#fff", "3": "#fff",
+                "4": "#fff", "5": "#000", "6": "#fff",
+            }
+            _rnames = {}
+            for _, _rw in scored.iterrows():
+                _rnames[str(int(_rw["枠番"]))] = _rw.get("選手名", "")
+
+            _boats = [1, 2, 3, 4, 5, 6]
+
+            # ── ヘッダー行（3着＝列ヘッダー） ──
+            _hdr = (
+                '<tr>'
+                '<th colspan="2" style="background:#0d1b2a;color:#7ab8e8;'
+                'padding:6px 4px;font-size:0.7rem;border-bottom:2px solid #1e5fa8;'
+                'text-align:center;white-space:nowrap">1着‑2着</th>'
+            )
+            for _b in _boats:
+                _bg = _OBG[str(_b)]
+                _fg = _OFG[str(_b)]
+                _bdr = "border:1px solid #888;" if _b == 1 else ""
+                _nm = _rnames.get(str(_b), "")
+                _short = _nm[:3] if len(_nm) > 3 else _nm
+                _hdr += (
+                    f'<th style="background:{_bg};color:{_fg};{_bdr}'
+                    f'padding:6px 2px;font-size:0.68rem;text-align:center;'
+                    f'font-weight:bold;min-width:48px;white-space:nowrap;'
+                    f'border-bottom:2px solid #1e5fa8">'
+                    f'{_b}.{_short}</th>'
+                )
+            _hdr += '</tr>'
+
+            # ── データ行 ──
+            _body = ''
+            for _f in _boats:
+                _secs = [s for s in _boats if s != _f]
+                for _si, _s in enumerate(_secs):
+                    _sep = (
+                        "border-top:2px solid #1e5fa8;"
+                        if _si == 0 and _f > 1 else ""
+                    )
+                    _tr = f'<tr style="{_sep}">'
+
+                    # 1着セル（グループ先頭のみ rowspan=5）
+                    if _si == 0:
+                        _bg1 = _OBG[str(_f)]
+                        _fg1 = _OFG[str(_f)]
+                        _bdr1 = "border:1px solid #888;" if _f == 1 else ""
+                        _tr += (
+                            f'<td rowspan="5" style="background:{_bg1};'
+                            f'color:{_fg1};{_bdr1}text-align:center;'
+                            f'font-weight:bold;font-size:0.9rem;'
+                            f'padding:2px 6px;vertical-align:middle;'
+                            f'width:26px;border-right:1px solid '
+                            f'rgba(30,95,168,0.3)">{_f}</td>'
+                        )
+
+                    # 2着セル
+                    _bg2 = _OBG[str(_s)]
+                    _fg2 = _OFG[str(_s)]
+                    _bdr2 = "border:1px solid #888;" if _s == 1 else ""
+                    _tr += (
+                        f'<td style="background:{_bg2};color:{_fg2};{_bdr2}'
+                        f'text-align:center;font-weight:bold;font-size:0.78rem;'
+                        f'padding:2px 4px;width:22px">{_s}</td>'
+                    )
+
+                    # 3着列（6列）
+                    for _t in _boats:
+                        if _t == _f:
+                            # 1着=3着 → 先頭行のみ rowspan=5 でブランク
+                            if _si == 0:
+                                _tr += (
+                                    f'<td rowspan="5" style="background:'
+                                    f'{_OBG[str(_f)]};opacity:0.2"></td>'
+                                )
+                        elif _t == _s:
+                            # 2着=3着 → 単一ブランク
+                            _tr += (
+                                f'<td style="background:{_OBG[str(_s)]};'
+                                f'opacity:0.2"></td>'
+                            )
+                        else:
+                            _combo = f"{_f}-{_s}-{_t}"
+                            _oval = odds.get(_combo)
+                            if _oval is not None:
+                                if _oval < 10:
+                                    _cbg = "rgba(231,76,60,0.25)"
+                                    _cfg = "#ff6b6b"
+                                    _cfw = "bold"
+                                elif _oval < 30:
+                                    _cbg = "rgba(241,196,15,0.12)"
+                                    _cfg = "#ffe066"
+                                    _cfw = "bold"
+                                elif _oval < 100:
+                                    _cbg = "transparent"
+                                    _cfg = "#e8f4ff"
+                                    _cfw = "normal"
+                                elif _oval >= 999.9:
+                                    _cbg = "transparent"
+                                    _cfg = "#444"
+                                    _cfw = "normal"
+                                else:
+                                    _cbg = "transparent"
+                                    _cfg = "#888"
+                                    _cfw = "normal"
+                                _ostr = f"{_oval:.1f}"
+                                _tr += (
+                                    f'<td style="background:{_cbg};'
+                                    f'color:{_cfg};text-align:right;'
+                                    f'font-size:0.73rem;padding:2px 4px;'
+                                    f'font-weight:{_cfw};white-space:nowrap;'
+                                    f'border-bottom:1px solid '
+                                    f'rgba(30,95,168,0.1)">{_ostr}</td>'
+                                )
+                            else:
+                                _tr += (
+                                    '<td style="text-align:right;color:#333;'
+                                    'font-size:0.73rem;padding:2px 4px">-</td>'
+                                )
+
+                    _tr += '</tr>'
+                    _body += _tr
+
+            _odds_tbl = (
+                f'<table style="border-collapse:collapse;width:100%;'
+                f'background:#0d1b2a">{_hdr}{_body}</table>'
+            )
+            st.markdown(
+                f'<div style="overflow-x:auto;'
+                f'-webkit-overflow-scrolling:touch">{_odds_tbl}</div>',
+                unsafe_allow_html=True,
+            )
+
     st.markdown("---")
 
     # ── 艇別パフォーマンスレーダーチャート ──────────────────────
