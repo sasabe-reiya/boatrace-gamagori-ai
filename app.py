@@ -15,6 +15,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from datetime import date, datetime
 import time
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -202,6 +203,8 @@ st.markdown('''<div class="main-header">
 for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km", "kimarite"):
     if key not in st.session_state:
         st.session_state[key] = None
+if "sidebar_open" not in st.session_state:
+    st.session_state.sidebar_open = True
 
 # ── サイドバー ────────────────────────────────────────────────────
 with st.sidebar:
@@ -210,42 +213,38 @@ with st.sidebar:
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
-# ── モバイル: 初回ロード時にサイドバーを自動展開 ──────────────────
-if st.session_state.result is None:
-    components.html(
-        """
-        <script>
-            (function() {
-                function tryOpenSidebar() {
-                    var doc = window.parent.document;
-                    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
-                    // サイドバーが閉じている場合のみ開く
-                    if (sidebar && sidebar.getAttribute('aria-expanded') === 'false') {
-                        // 閉じた状態のサイドバー展開ボタンを探す
-                        var btn = doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
-                               || doc.querySelector('button[data-testid="collapsedControl"]')
-                               || doc.querySelector('[data-testid="stSidebar"] button[kind="header"]');
-                        if (btn) { btn.click(); return true; }
-                    }
-                    // aria-expanded がない場合（モバイルで非表示の場合）
-                    if (!sidebar || sidebar.offsetWidth === 0) {
-                        var btn2 = doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
-                                || doc.querySelector('button[data-testid="collapsedControl"]');
-                        if (btn2) { btn2.click(); return true; }
-                    }
-                    return false;
-                }
-                // DOM構築完了を待ってリトライ
-                if (!tryOpenSidebar()) {
-                    setTimeout(tryOpenSidebar, 500);
-                    setTimeout(tryOpenSidebar, 1200);
-                    setTimeout(tryOpenSidebar, 2500);
-                }
-            })();
-        </script>
-        """,
-        height=0,
-    )
+# 予想実行ボタン押下時にサイドバーを閉じるフラグをセット
+if fetch_btn:
+    st.session_state.sidebar_open = False
+
+# ── モバイル: CSSでサイドバーの表示/非表示を制御 ──────────────────
+if st.session_state.sidebar_open:
+    st.markdown("""
+    <style>
+    @media (max-width: 768px) {
+        /* サイドバーを強制表示 */
+        section[data-testid="stSidebar"] {
+            transform: none !important;
+            width: 85vw !important;
+            max-width: 300px !important;
+            min-width: 260px !important;
+            margin-left: 0 !important;
+            left: 0 !important;
+            z-index: 999999 !important;
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] {
+            transform: none !important;
+            width: 85vw !important;
+            max-width: 300px !important;
+            min-width: 260px !important;
+            margin-left: 0 !important;
+        }
+        section[data-testid="stSidebar"] > div:first-child {
+            width: 100% !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
@@ -327,31 +326,8 @@ if fetch_btn:
         time.sleep(1)
         progress_bar.empty()
 
-        # サイドバーを自動的に閉じる
-        components.html(
-            """
-            <script>
-                (function() {
-                    function tryCloseSidebar() {
-                        var doc = window.parent.document;
-                        var sidebar = doc.querySelector('[data-testid="stSidebar"]');
-                        if (sidebar && sidebar.getAttribute('aria-expanded') !== 'false') {
-                            var btn = sidebar.querySelector('button[kind="header"]')
-                                   || doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
-                                   || doc.querySelector('button[data-testid="collapsedControl"]');
-                            if (btn) { btn.click(); return true; }
-                        }
-                        return false;
-                    }
-                    if (!tryCloseSidebar()) {
-                        setTimeout(tryCloseSidebar, 500);
-                        setTimeout(tryCloseSidebar, 1200);
-                    }
-                })();
-            </script>
-            """,
-            height=0,
-        )
+        # サイドバーを閉じて結果表示（rerunでCSS強制表示が消える）
+        st.rerun()
 
     else:
         progress_bar.progress(100, text="❌ データ取得失敗")
@@ -560,14 +536,20 @@ if st.session_state.result is not None:
     styled = styler.format(fmt).hide(axis="index")
     tbl_html = styled.to_html()
 
-    # 展示列ヘッダーにインラインスタイルを直接注入
-    _EXHIBIT_HDR_STYLE = "background-color:#0a6e5c !important;color:#5dffe0 !important;font-weight:bold"
-    for ecol in _EXHIBIT_COLS:
-        if ecol in display_df.columns:
-            tbl_html = tbl_html.replace(
-                f">{ecol}</th>",
-                f' style="{_EXHIBIT_HDR_STYLE}">{ecol}</th>',
-            )
+    # 展示列ヘッダーの色を変更（テーブルUUIDを取得しCSS IDセレクタで上書き）
+    _exhibit_idxs = [display_df.columns.get_loc(c) for c in _EXHIBIT_COLS if c in display_df.columns]
+    _uuid_m = re.search(r'id="(T_[a-zA-Z0-9_]+)"', tbl_html)
+    if _uuid_m and _exhibit_idxs:
+        _tid = _uuid_m.group(1)
+        _sel = ", ".join(f"#{_tid}_level0_col{i}" for i in _exhibit_idxs)
+        _ecss = (
+            f"<style>{_sel} {{"
+            f" background-color:#0a6e5c !important;"
+            f" color:#5dffe0 !important;"
+            f" font-weight:bold !important;"
+            f"}}</style>"
+        )
+        tbl_html = _ecss + tbl_html
 
     st.markdown(
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">{tbl_html}</div>',
