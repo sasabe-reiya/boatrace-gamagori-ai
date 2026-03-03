@@ -852,24 +852,22 @@ def generate_recommendations(
 
 
 # ────────────────────────────────────────────────────────────────
-# 2連単・2連複推奨買い目生成 【v3新規】
+# 2連単推奨買い目生成 【v3新規】
 # ────────────────────────────────────────────────────────────────
 
 def generate_2ren_recommendations(
     df_scored: pd.DataFrame,
     odds_2t: dict | None = None,
-    odds_2f: dict | None = None,
 ) -> dict:
     """
-    2連単・2連複の推奨買い目を生成する。
+    2連単の推奨買い目を生成する。
 
     Parameters
     ----------
     odds_2t : 2連単実オッズ {"1-2": 10.6, ...} or None
-    odds_2f : 2連複実オッズ {"1=2": 4.9, ...} or None
     """
     if df_scored.empty or "win_prob" not in df_scored.columns:
-        return {"2連単": [], "2連複": []}
+        return {"2連単": []}
 
     if "_raw_prob" in df_scored.columns:
         ability = df_scored["_raw_prob"].values / 100.0
@@ -904,38 +902,8 @@ def generate_2ren_recommendations(
             })
     nitan.sort(key=lambda x: x["的中確率"], reverse=True)
 
-    # 2連複: P(i=1着,j=2着) + P(j=1着,i=2着)
-    seen = set()
-    nifuku = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            key = tuple(sorted([i, j]))
-            if key in seen:
-                continue
-            seen.add(key)
-            p1 = ability[i] / total
-            p2 = ability[j] / total
-            a_gamma = ability ** gamma
-            rem_i = sum(a_gamma[m] for m in range(n) if m != i) + 1e-12
-            rem_j = sum(a_gamma[m] for m in range(n) if m != j) + 1e-12
-            joint = p1 * (a_gamma[j] / rem_i) + p2 * (a_gamma[i] / rem_j)
-
-            lo, hi = sorted([frames[i], frames[j]])
-            combo = f"{lo}={hi}"
-            actual_odds = odds_2f.get(combo) if odds_2f else None
-            ev = round(actual_odds * joint, 2) if actual_odds is not None else None
-            nifuku.append({
-                "買い目":    combo,
-                "的中確率":  round(joint * 100, 2),
-                "公正オッズ": round(1.0 / joint, 1) if joint > 1e-9 else 9999.0,
-                "実オッズ":  actual_odds,
-                "期待値":   ev,
-            })
-    nifuku.sort(key=lambda x: x["的中確率"], reverse=True)
-
     return {
         "2連単": nitan[:5],
-        "2連複": nifuku[:5],
     }
 
 
@@ -950,12 +918,11 @@ def predict(
     taka_data: dict | None = None,
     odds_dict: dict | None = None,
     odds_2t: dict | None = None,
-    odds_2f: dict | None = None,
     racer_kimarite: dict | None = None,
 ) -> dict:
     scored = calculate_scores(df, weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
     recs   = generate_recommendations(scored, odds_dict=odds_dict)
-    recs_2ren = generate_2ren_recommendations(scored, odds_2t=odds_2t, odds_2f=odds_2f)
+    recs_2ren = generate_2ren_recommendations(scored, odds_2t=odds_2t)
 
     top_boat   = scored.sort_values("win_prob", ascending=False).iloc[0]
     wind_speed = _parse_wind_speed(weather.get("風速", "?"))

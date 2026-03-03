@@ -204,33 +204,41 @@ st.markdown('''<div class="main-header">
 </div>''', unsafe_allow_html=True)
 
 # ── セッション初期化 ──────────────────────────────────────────────
-for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km"):
+for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km"):
     if key not in st.session_state:
         st.session_state[key] = None
 
-# ── 予想回数カウンタ（expanderのkey更新用） ──────────────────────
-if "pred_count" not in st.session_state:
-    st.session_state.pred_count = 0
+# ── 設定パネル表示フラグ ──────────────────────────────────────────
+if "show_settings" not in st.session_state:
+    st.session_state.show_settings = True  # 初回は開いた状態
 
 # ── レース設定パネル（メインエリア） ─────────────────────────────
-if st.session_state.result is None:
-    # 初回: 設定を直接表示（expanderなし）
-    st.markdown(
-        '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
-        'padding:0.8rem 1rem;margin-bottom:0.5rem">'
-        '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">⚙️ レース設定</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+if st.session_state.result is not None and not st.session_state.show_settings:
+    # 予想後で設定非表示: トグルボタンだけ表示
+    if st.button("⚙️ レース設定を開く", use_container_width=True):
+        st.session_state.show_settings = True
+        st.rerun()
+    race_no = None
+    race_date = None
+    fetch_btn = False
+else:
+    # 初回 or 設定表示中
+    if st.session_state.result is not None:
+        # 予想後: 閉じるボタンを表示
+        if st.button("⚙️ レース設定を閉じる", use_container_width=True):
+            st.session_state.show_settings = False
+            st.rerun()
+    else:
+        st.markdown(
+            '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+            'padding:0.8rem 1rem;margin-bottom:0.5rem">'
+            '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">⚙️ レース設定</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
     race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
-else:
-    # 予想後: expanderに格納（keyを毎回変えて確実に閉じた状態にする）
-    with st.expander("⚙️ レース設定", expanded=False, key=f"settings_{st.session_state.pred_count}"):
-        race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
-        race_date = st.date_input("開催日", date.today())
-        fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
@@ -250,7 +258,7 @@ if fetch_btn:
             f_data:     "出走表・直前データ",
             f_deadline: "締切時刻",
             f_odds:     "3連単オッズ",
-            f_odds_2tf: "2連単/複オッズ",
+            f_odds_2tf: "2連単オッズ",
             f_taka:     "高橋アナ予想",
             f_racer_km: "選手別決まり手",
         }
@@ -270,14 +278,13 @@ if fetch_btn:
         racer_km = f_racer_km.result()
 
     odds_2t = odds_2tf.get("2連単", {})
-    odds_2f = odds_2tf.get("2連複", {})
 
     if not df_raw.empty:
         progress_bar.progress(70, text="🧠 AI予想を計算中...")
         result = predict(
             df_raw, weather, race_no,
             taka_data=taka, odds_dict=odds,
-            odds_2t=odds_2t, odds_2f=odds_2f,
+            odds_2t=odds_2t,
             racer_kimarite=racer_km,
         )
 
@@ -289,7 +296,6 @@ if fetch_btn:
         st.session_state.date_str = d_str
         st.session_state.odds     = odds
         st.session_state.odds_2t  = odds_2t
-        st.session_state.odds_2f  = odds_2f
         st.session_state.taka     = taka
         st.session_state.racer_km = racer_km
 
@@ -303,8 +309,8 @@ if fetch_btn:
         time.sleep(1)
         progress_bar.empty()
 
-        # expanderのkeyを更新して確実に閉じた状態で再描画
-        st.session_state.pred_count += 1
+        # 設定パネルを閉じて再描画
+        st.session_state.show_settings = False
         st.rerun()
 
     else:
@@ -534,61 +540,6 @@ if st.session_state.result is not None:
         unsafe_allow_html=True,
     )
 
-    # ── 蒲郡コース別決まり手 ────────────────────────────────────────
-    venue_km = st.session_state.kimarite or {}
-    if venue_km:
-        with st.expander("🏟️ 蒲郡コース別決まり手（直近3ヶ月）", expanded=False):
-            _VK_COLORS = {
-                "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
-                "まくり差し": "#2ecc71", "抜き": "#9b59b6", "恵まれ": "#95a5a6",
-            }
-            _VK_FRAME_BG = {"1": "#fff", "2": "#000", "3": "#e74c3c",
-                            "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
-            _VK_FRAME_FG = {"1": "#000", "2": "#fff", "3": "#fff",
-                            "4": "#fff", "5": "#000", "6": "#fff"}
-            for course in sorted(venue_km.keys()):
-                km = venue_km[course]
-                cs = str(course)
-                fbg = _VK_FRAME_BG.get(cs, "#666")
-                ffg = _VK_FRAME_FG.get(cs, "#fff")
-                fborder = "border:1.5px solid #888;" if cs == "1" else ""
-                first_rate = km.get("1着率", 0.0)
-
-                bars_html = ""
-                for kt_name in ["逃げ", "差し", "まくり", "まくり差し", "抜き", "恵まれ"]:
-                    pct = km.get(kt_name, 0.0)
-                    if pct <= 0:
-                        continue
-                    color = _VK_COLORS.get(kt_name, "#888")
-                    bars_html += (
-                        f'<div style="display:flex;align-items:center;margin:1px 0">'
-                        f'<span style="color:#7ab8e8;font-size:0.7rem;width:55px;text-align:right;'
-                        f'margin-right:6px">{kt_name}</span>'
-                        f'<div style="flex:1;background:#1a2744;border-radius:3px;height:14px;overflow:hidden">'
-                        f'<div style="width:{min(pct, 100):.1f}%;height:100%;background:{color};'
-                        f'border-radius:3px"></div></div>'
-                        f'<span style="color:#fff;font-size:0.72rem;width:42px;text-align:right;'
-                        f'margin-left:6px">{pct:.1f}%</span>'
-                        f'</div>'
-                    )
-
-                st.markdown(
-                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:6px;'
-                    f'padding:8px 10px;margin:4px 0">'
-                    f'<div style="display:flex;align-items:center;margin-bottom:4px">'
-                    f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-                    f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
-                    f'width:22px;height:22px;font-weight:bold;font-size:0.8rem;margin-right:6px">'
-                    f'{cs}</span>'
-                    f'<span style="color:#fff;font-weight:bold;font-size:0.85rem">{cs}コース</span>'
-                    f'<span style="color:#7ab8e8;font-size:0.7rem;margin-left:auto">'
-                    f'1着率 {first_rate:.1f}%</span>'
-                    f'</div>'
-                    f'{bars_html}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
     # ── 選手別決まり手 ────────────────────────────────────────────
     racer_km = st.session_state.racer_km or {}
     if racer_km:
@@ -739,10 +690,9 @@ if st.session_state.result is not None:
     # ── 2連単・2連複 推奨買い目 【v3新規 + オッズ対応】 ─────────────
     recs_2ren = res.get("recommendations_2ren", {})
     nitan  = recs_2ren.get("2連単", [])
-    nifuku = recs_2ren.get("2連複", [])
-    if nitan or nifuku:
-        st.markdown("### 🎲 2連単・2連複 推奨")
-        st.caption("Heneryモデルによる2連系推奨買い目（上位5点）")
+    if nitan:
+        st.markdown("### 🎲 2連単 推奨")
+        st.caption("Heneryモデルによる2連単推奨買い目（上位5点）")
 
         def _render_2ren_card(r2: dict, accent: str):
             """2連系の1枚のカードを描画する。"""
@@ -782,22 +732,13 @@ if st.session_state.result is not None:
                 unsafe_allow_html=True,
             )
 
-        if nitan:
-            st.markdown(
-                '<div class="group-header" style="color:#f0a500;'
-                'border-bottom:2px solid #f0a500">2連単</div>',
-                unsafe_allow_html=True,
-            )
-            for r2 in nitan:
-                _render_2ren_card(r2, "#f0a500")
-        if nifuku:
-            st.markdown(
-                '<div class="group-header" style="color:#3498db;'
-                'border-bottom:2px solid #3498db;margin-top:0.8rem">2連複</div>',
-                unsafe_allow_html=True,
-            )
-            for r2 in nifuku:
-                _render_2ren_card(r2, "#3498db")
+        st.markdown(
+            '<div class="group-header" style="color:#f0a500;'
+            'border-bottom:2px solid #f0a500">2連単</div>',
+            unsafe_allow_html=True,
+        )
+        for r2 in nitan:
+            _render_2ren_card(r2, "#f0a500")
 
     st.markdown("---")
 
@@ -1105,7 +1046,6 @@ if st.session_state.result is not None:
                 ("選手別決まり手適合度の重み", f'{_W.get("racer_kimarite_weight", 3.0)}'),
                 ("Henery gamma", f'{_W["henery_gamma"]}'),
                 ("期待値閾値（穴選定）", f'{_W["ev_threshold"]}'),
-                ("展開連動パターン強度", f'{_W.get("tenkai_rendo_strength", 0.0)}'),
             ]),
         ]
 
