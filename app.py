@@ -34,10 +34,10 @@ from backtester import (
 st.set_page_config(page_title="蒲郡競艇AI予想", page_icon="🚤", layout="centered")
 
 st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <style>
     /* ── ベーススタイル ─────────────────────────────────── */
-    .main-header { background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 50%, #0d2855 100%); padding: 1rem; border-radius: 10px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; }
+    .main-header { background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 50%, #0d2855 100%); padding: 1rem; border-radius: 10px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; }
     .main-header h1 { color: #e8f4ff; margin: 0; font-size: 1.3rem; }
     .bet-box { background: #1a2744; border-left: 5px solid #f0a500; padding: 0.9rem 1rem; margin: 0.4rem 0; border-radius: 6px; }
     .bet-box-value { background: #12301a; border-left: 5px solid #2ecc71; padding: 0.9rem 1rem; margin: 0.4rem 0; border-radius: 6px; }

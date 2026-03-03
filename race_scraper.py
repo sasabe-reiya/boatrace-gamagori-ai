@@ -74,14 +74,14 @@ def fetch_race_card(race_no: int, date_str: str | None = None) -> pd.DataFrame:
         if name_div:
             name_link = name_div.find("a")
             if name_link and name_link.get("href"):
-                reg_m = re.search(r'toession=(\d+)', name_link["href"])
+                reg_m = re.search(r'toban=(\d+)', name_link["href"])
                 if reg_m:
                     reg_no = reg_m.group(1)
         if not reg_no:
             # フォールバック: tbody内の4桁数字で登録番号らしきものを探す
             for a_tag in tbody.find_all("a"):
                 href = a_tag.get("href", "")
-                reg_m = re.search(r'toession=(\d+)', href)
+                reg_m = re.search(r'toban=(\d+)', href)
                 if reg_m:
                     reg_no = reg_m.group(1)
                     break
@@ -584,11 +584,41 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
                         if odds_val is not None:
                             nitan_odds[f"{first}-{second}"] = odds_val
 
-        # ── 2連複パース ──────────────────────────────────────────
-        # 下三角行列: row r の 2着艇 = r+2, 有効列は g+1 < r+2 のみ
+        # ── 2連複パース（改良版） ──────────────────────────────────
+        # 方式A: 2連単と同じ12列構造（boat_number/odds ペア）を試す
+        # 方式B: 下三角行列（行ラベル + オッズ列）のフォールバック
         if nifuku_tbl:
             tbody = nifuku_tbl.find("tbody")
-            if tbody:
+            if not tbody:
+                tbody = nifuku_tbl
+
+            # 方式A: 12列構造
+            parsed_a = {}
+            for tr in tbody.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 12:
+                    continue
+                for g in range(6):
+                    boat_td = tds[2 * g]
+                    odds_td = tds[2 * g + 1]
+                    if "is-disabled" in " ".join(odds_td.get("class", [])):
+                        continue
+                    boat_text = boat_td.get_text(strip=True)
+                    if not re.match(r'^[1-6]$', boat_text):
+                        continue
+                    boat_num = int(boat_text)
+                    other_num = g + 1
+                    if boat_num == other_num:
+                        continue
+                    odds_val = _parse_odds_val(odds_td.get_text(strip=True))
+                    if odds_val is not None:
+                        a, b = sorted([boat_num, other_num])
+                        parsed_a[f"{a}={b}"] = odds_val
+
+            if len(parsed_a) >= 10:
+                nifuku_odds = parsed_a
+            else:
+                # 方式B: 下三角行列
                 for r_idx, tr in enumerate(tbody.find_all("tr")):
                     second_boat = r_idx + 2
                     if second_boat > 6:
@@ -611,6 +641,34 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
 
     except Exception as e:
         print(f"[scraper] 2連単/2連複オッズ取得失敗: {e}")
+
+    # ── 整合性チェック: 2連複オッズ < 2連単オッズ であるべき ───
+    # 同じペアで比較して逆転している場合、ラベルが入れ替わっている
+    if nitan_odds and nifuku_odds:
+        swap_count = 0
+        check_count = 0
+        for key_f, odds_f in nifuku_odds.items():
+            a, b = key_f.split("=")
+            key_t = f"{a}-{b}"
+            if key_t in nitan_odds:
+                check_count += 1
+                if odds_f > nitan_odds[key_t]:
+                    swap_count += 1
+        if check_count >= 3 and swap_count > check_count * 0.6:
+            print(f"[scraper] 2連単/2連複オッズ逆転検出 ({swap_count}/{check_count}) → ラベル入替")
+            nitan_odds, nifuku_odds = nifuku_odds, nitan_odds
+            # キー形式も修正（"=" ↔ "-"）
+            new_nitan = {}
+            for k, v in nitan_odds.items():
+                a, b = k.split("=") if "=" in k else k.split("-")
+                new_nitan[f"{a}-{b}"] = v
+            new_nifuku = {}
+            for k, v in nifuku_odds.items():
+                a, b = k.split("-") if "-" in k else k.split("=")
+                lo, hi = sorted([a, b])
+                new_nifuku[f"{lo}={hi}"] = v
+            nitan_odds = new_nitan
+            nifuku_odds = new_nifuku
 
     return {"2連単": nitan_odds, "2連複": nifuku_odds}
 

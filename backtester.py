@@ -256,6 +256,7 @@ WEIGHT_KEYS = [
     "boat2_rate", "taka_boost",
     "fl_f_penalty", "weight_calm", "course_win_rate",
     "momentum", "lap_time",
+    "mawari_time", "chokusen_time", "turn_master_bonus",
 ]
 
 

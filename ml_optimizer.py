@@ -57,6 +57,7 @@ def evaluate_weights(weight_vector: np.ndarray, results: list[dict]) -> float:
         "boat2_rate", "taka_boost",
         "fl_f_penalty", "weight_calm", "course_win_rate",
         "momentum", "lap_time",
+        "mawari_time", "chokusen_time", "turn_master_bonus",
     ]
 
     w_clamped = np.clip(weight_vector, 0.0, 50.0)
@@ -136,6 +137,7 @@ def optimize(max_iter: int = 200) -> dict:
         "boat2_rate", "taka_boost",
         "fl_f_penalty", "weight_calm", "course_win_rate",
         "momentum", "lap_time",
+        "mawari_time", "chokusen_time", "turn_master_bonus",
     ]
     x0 = np.array([W.get(k, 1.0) for k in keys])
 
