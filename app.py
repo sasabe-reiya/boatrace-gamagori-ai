@@ -24,7 +24,7 @@ import streamlit.components.v1 as components
 from race_scraper import (
     fetch_full_race_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
-    fetch_venue_kimarite, fetch_racer_kimarite,
+    fetch_racer_kimarite,
 )
 from scorer import predict
 from result_tracker import save_prediction
@@ -204,31 +204,46 @@ st.markdown('''<div class="main-header">
 </div>''', unsafe_allow_html=True)
 
 # ── セッション初期化 ──────────────────────────────────────────────
-for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km", "kimarite"):
+for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km"):
     if key not in st.session_state:
         st.session_state[key] = None
 
+# ── 予想回数カウンタ（expanderのkey更新用） ──────────────────────
+if "pred_count" not in st.session_state:
+    st.session_state.pred_count = 0
+
 # ── レース設定パネル（メインエリア） ─────────────────────────────
-# 初回（結果なし）→ 開いた状態、予想後 → 閉じた状態
-_panel_expanded = st.session_state.result is None
-with st.expander("⚙️ レース設定", expanded=_panel_expanded):
+if st.session_state.result is None:
+    # 初回: 設定を直接表示（expanderなし）
+    st.markdown(
+        '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+        'padding:0.8rem 1rem;margin-bottom:0.5rem">'
+        '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">⚙️ レース設定</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
+else:
+    # 予想後: expanderに格納（keyを毎回変えて確実に閉じた状態にする）
+    with st.expander("⚙️ レース設定", expanded=False, key=f"settings_{st.session_state.pred_count}"):
+        race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
+        race_date = st.date_input("開催日", date.today())
+        fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
     d_str = race_date.strftime("%Y%m%d")
     progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
-    # 独立した7つのデータ取得を並列実行
-    with ThreadPoolExecutor(max_workers=7) as executor:
+    # 独立した6つのデータ取得を並列実行
+    with ThreadPoolExecutor(max_workers=6) as executor:
         f_data     = executor.submit(fetch_full_race_data, race_no, d_str, True)
         f_deadline = executor.submit(fetch_deadline, race_no, d_str)
         f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
         f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
         f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str)
-        f_kimarite = executor.submit(fetch_venue_kimarite)
         f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str)
 
         futures_map = {
@@ -237,7 +252,6 @@ if fetch_btn:
             f_odds:     "3連単オッズ",
             f_odds_2tf: "2連単/複オッズ",
             f_taka:     "高橋アナ予想",
-            f_kimarite: "決まり手データ",
             f_racer_km: "選手別決まり手",
         }
         done_count = 0
@@ -253,15 +267,10 @@ if fetch_btn:
         odds     = f_odds.result()
         odds_2tf = f_odds_2tf.result()
         taka     = f_taka.result()
-        kimarite_raw = f_kimarite.result()
         racer_km = f_racer_km.result()
 
     odds_2t = odds_2tf.get("2連単", {})
     odds_2f = odds_2tf.get("2連複", {})
-
-    # 決まり手データ: スクレイピング失敗時はデフォルト値にフォールバック
-    from config import GAMAGORI_KIMARITE_DEFAULT
-    kimarite = kimarite_raw if kimarite_raw else GAMAGORI_KIMARITE_DEFAULT
 
     if not df_raw.empty:
         progress_bar.progress(70, text="🧠 AI予想を計算中...")
@@ -269,7 +278,6 @@ if fetch_btn:
             df_raw, weather, race_no,
             taka_data=taka, odds_dict=odds,
             odds_2t=odds_2t, odds_2f=odds_2f,
-            kimarite_data=kimarite,
             racer_kimarite=racer_km,
         )
 
@@ -284,7 +292,6 @@ if fetch_btn:
         st.session_state.odds_2f  = odds_2f
         st.session_state.taka     = taka
         st.session_state.racer_km = racer_km
-        st.session_state.kimarite = kimarite
 
         confidence = (
             result["scored_df"]["confidence"].iloc[0]
@@ -296,7 +303,8 @@ if fetch_btn:
         time.sleep(1)
         progress_bar.empty()
 
-        # 設定パネルを閉じて結果表示（rerunでexpandedがFalseになる）
+        # expanderのkeyを更新して確実に閉じた状態で再描画
+        st.session_state.pred_count += 1
         st.rerun()
 
     else:

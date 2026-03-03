@@ -1396,78 +1396,7 @@ def generate_sample_data(race_no: int = 1) -> tuple[pd.DataFrame, dict]:
 
 
 # ─────────────────────────────────────────────
-# 14. 蒲郡コース別決まり手データ取得
-# ─────────────────────────────────────────────
-def fetch_venue_kimarite() -> dict:
-    """
-    boatrace.jp のボートレース場データページからコース別決まり手データを取得する。
-
-    データソース: /owpc/pc/data/stadium?jcd=07
-    テーブル「コース別1着率・決まり手」(直近3ヶ月)をパースする。
-
-    Returns
-    -------
-    {
-        1: {"1着率": 58.3, "逃げ": 97.4, "まくり": 0.0, "差し": 0.0,
-            "まくり差し": 0.0, "抜き": 2.5, "恵まれ": 0.0},
-        2: {...}, ... 6: {...}
-    }
-    空辞書の場合はデータ取得失敗（config.py のデフォルト値にフォールバック）。
-    """
-    url = f"{BASE_URL}/owpc/pc/data/stadium"
-    params = {"jcd": JYCD}
-    soup = _get_soup(url, params)
-    if not soup:
-        return {}
-
-    kimarite = {}
-    try:
-        for tbl in soup.find_all("table"):
-            tbl_text = tbl.get_text()
-            # 決まり手テーブルを特定: 「逃げ」と「まくり差し」の両方を含む
-            if "逃げ" not in tbl_text or "まくり差し" not in tbl_text:
-                continue
-            if "コース" not in tbl_text:
-                continue
-
-            for tr in tbl.find_all("tr"):
-                cells = tr.find_all(["td", "th"])
-                texts = [c.get_text(strip=True) for c in cells]
-                if not texts:
-                    continue
-                # コース番号(1-6)で始まる行を探す
-                if not re.fullmatch(r'[1-6]', texts[0]):
-                    continue
-
-                course = int(texts[0])
-                nums = []
-                for t in texts[1:]:
-                    v = _to_float(t)
-                    nums.append(v if v is not None else 0.0)
-
-                if len(nums) >= 7:
-                    # 着順率6列 + 決まり手6列 = 12列以上の場合
-                    # 列順: 1着率,2着率,3着率,4着率,5着率,6着率, 逃げ,まくり(捲り),差し,まくり差し,抜き,恵まれ
-                    kimarite[course] = {
-                        "1着率":     nums[0],
-                        "逃げ":      nums[6] if len(nums) >= 13 else nums[1],
-                        "まくり":    nums[7] if len(nums) >= 13 else nums[2],
-                        "差し":      nums[8] if len(nums) >= 13 else nums[3],
-                        "まくり差し": nums[9] if len(nums) >= 13 else nums[4],
-                        "抜き":      nums[10] if len(nums) >= 13 else nums[5],
-                        "恵まれ":    nums[11] if len(nums) >= 13 else nums[6],
-                    }
-
-            if kimarite:
-                break
-    except Exception as e:
-        print(f"[scraper] 決まり手データ取得失敗: {e}")
-
-    return kimarite
-
-
-# ─────────────────────────────────────────────
-# 15. 選手別決まり手データ取得（kyoteibiyori.com）
+# 14. 選手別決まり手データ取得（kyoteibiyori.com）
 # ─────────────────────────────────────────────
 _KYOTEI_BASE = "https://kyoteibiyori.com"
 _KYOTEI_HEADERS = {
@@ -1481,18 +1410,19 @@ _KYOTEI_HEADERS = {
 def _parse_henko_html(html: str, course: int) -> dict | None:
     """
     request_racer_henko.php の HTML レスポンスを解析し、
-    指定コースの決まり手データを返す。
+    指定コースの決まり手データを返す（直近6ヶ月データ使用）。
 
     HTML テーブル構造（新概念データ）:
-        Row 0: ヘッダー（黒:直近1年/灰:直近6ヶ月）
-        Row 1: コース番号 1-6
-        Group 1 (rows 2-4): 逃げ/逃し — コース1-2のみ
-        Group 2 (rows 5-7): 差され/差し — 全6コース
-        Group 3 (rows 8-10): 捲られ/捲り — 全6コース
-        Group 4 (rows 11-13): 捲られ差/捲り差し — 全6コース
-        各グループ: [ラベル行, 1年データ行, 6ヶ月データ行]
-    コース1: 逃げ(勝ち) / 差され・捲られ・捲られ差(負け)
-    コース2-6: 逃し(負け) / 差し・捲り・捲り差し(勝ち)
+        各グループはラベル行（shusso_title / shusso_title_make クラス）で始まり、
+        続く2行がデータ行（1行目=直近1年, 2行目=直近6ヶ月）。
+        Group 1: 逃げ/逃し — コース1-2のみ（2値）
+        Group 2: 差され/差し — 全6コース
+        Group 3: 捲られ/捲り — 全6コース
+        Group 4: 捲られ差/捲り差し — 全6コース
+    各グループのデータ配列:
+        [0]=コース1, [1]=コース2, ... [5]=コース6
+    コース1: 逃げ(勝ち視点), 差され・捲られ・捲られ差(負け視点)
+    コース2-6: 差し・捲り・捲り差し(勝ち視点)
     """
     soup = BeautifulSoup(html, "html.parser")
     rows = soup.find_all("tr")
@@ -1500,6 +1430,7 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
         return None
 
     def _extract_pcts(tr_tag) -> list[float]:
+        """1行の全TDセルからパーセンテージ数値をリストで抽出。"""
         pcts = []
         for c in tr_tag.find_all("td"):
             text = c.get_text(strip=True).replace("%", "")
@@ -1509,12 +1440,31 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
                 pass
         return pcts
 
-    # 直近6ヶ月データ（各グループの2番目のデータ行）を使う
-    # 構造: [ラベル行, 1年データ行, 6ヶ月データ行] × 4グループ
-    g1_6m = _extract_pcts(rows[4]) if len(rows) > 4 else []
-    g2_6m = _extract_pcts(rows[7]) if len(rows) > 7 else []
-    g3_6m = _extract_pcts(rows[10]) if len(rows) > 10 else []
-    g4_6m = _extract_pcts(rows[13]) if len(rows) > 13 else []
+    def _is_label_row(tr_tag) -> bool:
+        """shusso_title / shusso_title_make クラスを含むラベル行か判定。"""
+        for td in tr_tag.find_all("td"):
+            cls = td.get("class") or []
+            if "shusso_title" in cls or "shusso_title_make" in cls:
+                return True
+        return False
+
+    # ラベル行を検出して各グループの6ヶ月データを取得
+    # 各グループ: ラベル行 → 1年データ行 → 6ヶ月データ行
+    group_data_6m = []
+    for i, row in enumerate(rows):
+        if _is_label_row(row) and i + 2 < len(rows):
+            data_6m = _extract_pcts(rows[i + 2])  # 2行後 = 6ヶ月データ
+            if data_6m:
+                group_data_6m.append(data_6m)
+
+    if len(group_data_6m) < 4:
+        print(f"[scraper] 決まり手HTML解析: グループ数不足 ({len(group_data_6m)}/4)")
+        return None
+
+    g1_6m = group_data_6m[0]  # 逃げ/逃し（2値: コース1, コース2）
+    g2_6m = group_data_6m[1]  # 差され/差し（6値: コース1-6）
+    g3_6m = group_data_6m[2]  # 捲られ/捲り（6値: コース1-6）
+    g4_6m = group_data_6m[3]  # 捲られ差/捲り差し（6値: コース1-6）
 
     if course == 1:
         nige = g1_6m[0] if len(g1_6m) > 0 else 0.0
@@ -1528,7 +1478,7 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
             "レース数": 0,
         }
     else:
-        idx = course - 1  # 0-indexed into the 6-element arrays
+        idx = course - 1  # 0-indexed: コース2→idx=1, コース3→idx=2, ...
         sashi = g2_6m[idx] if len(g2_6m) > idx else 0.0
         makuri = g3_6m[idx] if len(g3_6m) > idx else 0.0
         makuri_sashi = g4_6m[idx] if len(g4_6m) > idx else 0.0
