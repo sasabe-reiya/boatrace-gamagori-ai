@@ -210,7 +210,23 @@ with st.sidebar:
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
-
+# ── モバイル: 初回ロード時にサイドバーを自動展開 ──────────────────
+if st.session_state.result is None:
+    components.html(
+        """
+        <script>
+            (function() {
+                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                if (sidebar && sidebar.getAttribute('aria-expanded') === 'false') {
+                    const btn = window.parent.document.querySelector('[data-testid="stSidebar"] button[kind="header"]')
+                             || window.parent.document.querySelector('button[data-testid="collapsedControl"]');
+                    if (btn) btn.click();
+                }
+            })();
+        </script>
+        """,
+        height=0,
+    )
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
@@ -296,11 +312,14 @@ if fetch_btn:
         components.html(
             """
             <script>
-                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-                if (sidebar) {
-                    const btn = sidebar.querySelector('button[kind="header"]');
-                    if (btn) btn.click();
-                }
+                (function() {
+                    const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                    if (sidebar && sidebar.getAttribute('aria-expanded') !== 'false') {
+                        const btn = sidebar.querySelector('button[kind="header"]')
+                                 || window.parent.document.querySelector('button[data-testid="collapsedControl"]');
+                        if (btn) btn.click();
+                    }
+                })();
             </script>
             """,
             height=0,
