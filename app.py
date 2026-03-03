@@ -29,7 +29,7 @@ from race_scraper import (
 from scorer import predict
 from result_tracker import save_prediction
 
-st.set_page_config(page_title="舟券錬金術 - 蒲郡", page_icon="⚗️", layout="centered", initial_sidebar_state="expanded")
+st.set_page_config(page_title="舟券錬金術 - 蒲郡", page_icon="⚗️", layout="centered", initial_sidebar_state="collapsed")
 
 # ── パスワード認証 ──────────────────────────────────────────────────
 APP_PASSWORD = "sasabe"
@@ -111,11 +111,15 @@ st.markdown("""
     /* ── 買い目グループヘッダー ─────────────────────────── */
     .group-header { text-align: center; font-size: 1rem; font-weight: bold; padding-bottom: 4px; margin-bottom: 6px; }
 
+    /* ── サイドバー非表示（設定はメインエリアのexpanderに移動済み） */
+    section[data-testid="stSidebar"],
+    button[data-testid="stSidebarCollapsedControl"],
+    button[data-testid="collapsedControl"] { display: none !important; }
+
     /* ── モバイル最適化 ─────────────────────────────────── */
     @media (max-width: 768px) {
         /* Streamlitの余白を縮小 */
         .stMainBlockContainer { padding: 0.5rem 0.8rem !important; }
-        section[data-testid="stSidebar"] { min-width: 260px !important; }
 
         /* 見出しサイズ調整 */
         .main-header h1 { font-size: 1.1rem; letter-spacing: 1px; }
@@ -203,48 +207,14 @@ st.markdown('''<div class="main-header">
 for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "odds_2f", "taka", "racer_km", "kimarite"):
     if key not in st.session_state:
         st.session_state[key] = None
-if "sidebar_open" not in st.session_state:
-    st.session_state.sidebar_open = True
 
-# ── サイドバー ────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### ⚙️ レース設定")
-    race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=False, format_func=lambda x: f"{x}R")
+# ── レース設定パネル（メインエリア） ─────────────────────────────
+# 初回（結果なし）→ 開いた状態、予想後 → 閉じた状態
+_panel_expanded = st.session_state.result is None
+with st.expander("⚙️ レース設定", expanded=_panel_expanded):
+    race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
-
-# 予想実行ボタン押下時にサイドバーを閉じるフラグをセット
-if fetch_btn:
-    st.session_state.sidebar_open = False
-
-# ── モバイル: CSSでサイドバーの表示/非表示を制御 ──────────────────
-if st.session_state.sidebar_open:
-    st.markdown("""
-    <style>
-    @media (max-width: 768px) {
-        /* サイドバーを強制表示 */
-        section[data-testid="stSidebar"] {
-            transform: none !important;
-            width: 85vw !important;
-            max-width: 300px !important;
-            min-width: 260px !important;
-            margin-left: 0 !important;
-            left: 0 !important;
-            z-index: 999999 !important;
-        }
-        section[data-testid="stSidebar"][aria-expanded="false"] {
-            transform: none !important;
-            width: 85vw !important;
-            max-width: 300px !important;
-            min-width: 260px !important;
-            margin-left: 0 !important;
-        }
-        section[data-testid="stSidebar"] > div:first-child {
-            width: 100% !important;
-        }
-    }
-    </style>
-    """, unsafe_allow_html=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
@@ -326,7 +296,7 @@ if fetch_btn:
         time.sleep(1)
         progress_bar.empty()
 
-        # サイドバーを閉じて結果表示（rerunでCSS強制表示が消える）
+        # 設定パネルを閉じて結果表示（rerunでexpandedがFalseになる）
         st.rerun()
 
     else:
