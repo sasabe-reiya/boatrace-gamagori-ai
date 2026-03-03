@@ -216,11 +216,30 @@ if st.session_state.result is None:
         """
         <script>
             (function() {
-                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-                if (sidebar && sidebar.getAttribute('aria-expanded') === 'false') {
-                    const btn = window.parent.document.querySelector('[data-testid="stSidebar"] button[kind="header"]')
-                             || window.parent.document.querySelector('button[data-testid="collapsedControl"]');
-                    if (btn) btn.click();
+                function tryOpenSidebar() {
+                    var doc = window.parent.document;
+                    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                    // サイドバーが閉じている場合のみ開く
+                    if (sidebar && sidebar.getAttribute('aria-expanded') === 'false') {
+                        // 閉じた状態のサイドバー展開ボタンを探す
+                        var btn = doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
+                               || doc.querySelector('button[data-testid="collapsedControl"]')
+                               || doc.querySelector('[data-testid="stSidebar"] button[kind="header"]');
+                        if (btn) { btn.click(); return true; }
+                    }
+                    // aria-expanded がない場合（モバイルで非表示の場合）
+                    if (!sidebar || sidebar.offsetWidth === 0) {
+                        var btn2 = doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
+                                || doc.querySelector('button[data-testid="collapsedControl"]');
+                        if (btn2) { btn2.click(); return true; }
+                    }
+                    return false;
+                }
+                // DOM構築完了を待ってリトライ
+                if (!tryOpenSidebar()) {
+                    setTimeout(tryOpenSidebar, 500);
+                    setTimeout(tryOpenSidebar, 1200);
+                    setTimeout(tryOpenSidebar, 2500);
                 }
             })();
         </script>
@@ -313,11 +332,20 @@ if fetch_btn:
             """
             <script>
                 (function() {
-                    const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-                    if (sidebar && sidebar.getAttribute('aria-expanded') !== 'false') {
-                        const btn = sidebar.querySelector('button[kind="header"]')
-                                 || window.parent.document.querySelector('button[data-testid="collapsedControl"]');
-                        if (btn) btn.click();
+                    function tryCloseSidebar() {
+                        var doc = window.parent.document;
+                        var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                        if (sidebar && sidebar.getAttribute('aria-expanded') !== 'false') {
+                            var btn = sidebar.querySelector('button[kind="header"]')
+                                   || doc.querySelector('button[data-testid="stSidebarCollapsedControl"]')
+                                   || doc.querySelector('button[data-testid="collapsedControl"]');
+                            if (btn) { btn.click(); return true; }
+                        }
+                        return false;
+                    }
+                    if (!tryCloseSidebar()) {
+                        setTimeout(tryCloseSidebar, 500);
+                        setTimeout(tryCloseSidebar, 1200);
                     }
                 })();
             </script>
