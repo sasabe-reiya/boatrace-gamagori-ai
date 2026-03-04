@@ -9,6 +9,7 @@
 import sys
 import os
 import hashlib
+import json
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -17,6 +18,8 @@ from datetime import date, datetime
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+APP_VERSION = "v3.1-20260304"
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import JYNAME
@@ -27,6 +30,67 @@ from race_scraper import (
 )
 from scorer import predict
 from result_tracker import save_prediction
+
+# ── 結果キャッシュ（セッション喪失対策）──────────────────────────
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "_cache")
+os.makedirs(_CACHE_DIR, exist_ok=True)
+
+def _cache_path(race_no, d_str):
+    return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}.json")
+
+def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data):
+    """予想結果をファイルにキャッシュ（セッション切断対策）"""
+    try:
+        # scored_dfをJSON化可能に変換
+        scored_list = result["scored_df"].to_dict(orient="records") if hasattr(result["scored_df"], "to_dict") else []
+        scored_cols = list(result["scored_df"].columns) if hasattr(result["scored_df"], "columns") else []
+        cache = {
+            "scored_list": scored_list,
+            "scored_cols": scored_cols,
+            "recommendations": result.get("recommendations", []),
+            "all_3t_candidates": result.get("all_3t_candidates", []),
+            "weather": weather,
+            "deadline": deadline,
+            "odds": odds,
+            "odds_2t": odds_2t,
+            "taka": taka,
+            "racer_km": racer_km,
+            "race_result": race_result_data,
+            "race_no": race_no,
+            "date_str": d_str,
+        }
+        with open(_cache_path(race_no, d_str), "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+def _load_result_cache(race_no, d_str):
+    """キャッシュから予想結果を復元"""
+    try:
+        path = _cache_path(race_no, d_str)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        # scored_dfを復元
+        scored_df = pd.DataFrame(cache["scored_list"], columns=cache["scored_cols"])
+        result = {
+            "scored_df": scored_df,
+            "recommendations": cache.get("recommendations", []),
+            "all_3t_candidates": cache.get("all_3t_candidates", []),
+        }
+        return {
+            "result": result,
+            "weather": cache.get("weather"),
+            "deadline": cache.get("deadline"),
+            "odds": cache.get("odds"),
+            "odds_2t": cache.get("odds_2t"),
+            "taka": cache.get("taka"),
+            "racer_km": cache.get("racer_km"),
+            "race_result": cache.get("race_result"),
+        }
+    except Exception:
+        return None
 
 st.set_page_config(page_title="競艇予想AI レイヤドン", page_icon="🔱", layout="centered", initial_sidebar_state="collapsed")
 
@@ -198,6 +262,25 @@ for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odd
     if key not in st.session_state:
         st.session_state[key] = None
 
+# ── セッション喪失時のキャッシュ復元 ─────────────────────────────
+# Google Appなどのインアプリブラウザでセッションが切断された場合、
+# query_paramsのrace番号と日付からキャッシュを復元する
+if st.session_state.result is None:
+    _restore_race = st.query_params.get("race", "1")
+    _restore_date = date.today().strftime("%Y%m%d")
+    _cached = _load_result_cache(_restore_race, _restore_date)
+    if _cached:
+        st.session_state.result      = _cached["result"]
+        st.session_state.weather     = _cached["weather"]
+        st.session_state.deadline    = _cached["deadline"]
+        st.session_state.race_no     = int(_restore_race)
+        st.session_state.date_str    = _restore_date
+        st.session_state.odds        = _cached["odds"]
+        st.session_state.odds_2t     = _cached["odds_2t"]
+        st.session_state.taka        = _cached["taka"]
+        st.session_state.racer_km    = _cached["racer_km"]
+        st.session_state.race_result = _cached["race_result"]
+
 # ── 設定パネル表示フラグ ──────────────────────────────────────────
 if "show_settings" not in st.session_state:
     st.session_state.show_settings = True  # 初回は開いた状態
@@ -324,6 +407,12 @@ if fetch_btn:
         progress_bar.progress(100, text="✅ 予想完了！")
         time.sleep(0.5)
         progress_bar.empty()
+
+        # 結果をファイルキャッシュに保存（セッション切断対策）
+        _save_result_cache(
+            race_no, d_str, result, weather, deadline,
+            odds, odds_2t, taka, racer_km, race_result_data,
+        )
 
         # 設定パネルを閉じる（次回描画時に反映）
         st.session_state.show_settings = False
@@ -1393,3 +1482,13 @@ if st.session_state.result is not None:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+# ── フッター（バージョン情報）────────────────────────────────────
+st.markdown("---")
+_has_result = "あり" if st.session_state.result is not None else "なし"
+st.markdown(
+    f'<div style="text-align:center;color:#555;font-size:0.7rem;padding:0.5rem 0">'
+    f'{APP_VERSION} | 結果: {_has_result}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
