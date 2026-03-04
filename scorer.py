@@ -1100,6 +1100,313 @@ def generate_2ren_recommendations(
 
 
 # ────────────────────────────────────────────────────────────────
+# 展開予想（1マーク）
+# ────────────────────────────────────────────────────────────────
+
+_CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"]
+
+
+def generate_tenkai_prediction(
+    df_scored: pd.DataFrame,
+    weather: dict,
+    racer_kimarite: dict | None = None,
+    race_no: int = 1,
+) -> list[dict]:
+    """1マーク旋回時の展開シナリオを2〜4パターン生成する。"""
+    n = len(df_scored)
+    if n < 6:
+        return []
+
+    # ── データ抽出 ──────────────────────────────────────────────
+    course_positions = df_scored["_course_pos"].tolist() if "_course_pos" in df_scored.columns else list(range(n))
+    frames     = df_scored["枠番"].astype(str).values
+    names      = df_scored["選手名"].values if "選手名" in df_scored.columns else [""] * n
+    win_probs  = df_scored["_raw_prob"].values if "_raw_prob" in df_scored.columns else df_scored["win_prob"].values
+    st_raw     = df_scored["スタートタイミング"].values if "スタートタイミング" in df_scored.columns else [None] * n
+    tilts      = np.array([_to_float(v) for v in df_scored["チルト"].values])
+    mawari     = np.array([_to_float(v) for v in (df_scored["まわり足タイム"].values if "まわり足タイム" in df_scored.columns else [0]*n)])
+    chokusen   = np.array([_to_float(v) for v in (df_scored["直線タイム"].values if "直線タイム" in df_scored.columns else [0]*n)])
+
+    # ST値のパース
+    st_vals = np.full(n, np.nan)
+    for i, v in enumerate(st_raw):
+        try:
+            if v is not None:
+                st_vals[i] = float(v)
+        except (TypeError, ValueError):
+            pass
+    valid_sts = st_vals[~np.isnan(st_vals) & (st_vals >= 0)]
+    mean_st = valid_sts.mean() if len(valid_sts) >= 2 else None
+
+    # コース→DataFrame行インデックスのマッピング
+    course_to_idx = {}
+    for i in range(n):
+        course_to_idx[course_positions[i]] = i
+
+    # 気象情報
+    wind_dir   = str(weather.get("風向", "-"))
+    wind_speed = _parse_wind_speed(weather.get("風速", 0))
+    is_stabilizer = weather.get("安定板", False)
+    is_final   = weather.get("is_final", False)
+    grade      = weather.get("grade", "一般")
+
+    # まわり足・直線のランキング（0=最速）
+    valid_mw = mawari[mawari > 0]
+    valid_ch = chokusen[chokusen > 0]
+
+    def _mawari_rank(idx):
+        if mawari[idx] <= 0 or len(valid_mw) < 2:
+            return 99
+        return int(sum(1 for j in range(n) if mawari[j] > 0 and mawari[j] < mawari[idx]))
+
+    def _chokusen_rank(idx):
+        if chokusen[idx] <= 0 or len(valid_ch) < 2:
+            return 99
+        return int(sum(1 for j in range(n) if chokusen[j] > 0 and chokusen[j] < chokusen[idx]))
+
+    # ── イン逃げ確率 ────────────────────────────────────────────
+    c1_idx = course_to_idx.get(0)
+    if c1_idx is None:
+        return []
+
+    nige_score = 0.555  # 蒲郡の基礎イン逃げ率
+
+    # ST優位性
+    if mean_st is not None and not np.isnan(st_vals[c1_idx]):
+        c1_st = st_vals[c1_idx]
+        st_adv = (mean_st - c1_st)  # 正=平均より速い
+        nige_score += st_adv * W.get("tenkai_st_factor", 2.0)
+
+    # 風向効果
+    wind_eff = WIND_COURSE_EFFECT.get(wind_dir, {}).get(0, 0.0)
+    wind_mult = min(wind_speed / 3.0, 2.0)
+    nige_score += wind_eff * wind_mult * W.get("tenkai_wind_factor", 0.05)
+
+    # 安定板
+    if is_stabilizer:
+        nige_score += W.get("tenkai_stabilizer_boost", 0.08)
+
+    # 選手の逃げ率 / 脆弱性
+    c1_frame = frames[c1_idx]
+    c1_rk = (racer_kimarite or {}).get(c1_frame, {})
+    c1_nige_pct = c1_rk.get("逃げ", 55.0) / 100.0
+    nige_score *= (0.6 + 0.4 * c1_nige_pct / 0.555)
+
+    c1_vulnerability = (c1_rk.get("差され", 0) + c1_rk.get("捲られ", 0) + c1_rk.get("捲られ差", 0)) / 100.0
+    nige_score *= max(0.5, 1.0 - c1_vulnerability * 0.3)
+
+    # 優勝戦 / グレード / ナイター
+    if is_final:
+        nige_score += 0.05
+    if grade in ("SG", "G1"):
+        nige_score -= 0.03
+    if race_no >= G["night_race_start"]:
+        nige_score += 0.02
+
+    nige_score = max(0.15, min(0.85, nige_score))
+
+    nige_factors = []
+    if mean_st is not None and not np.isnan(st_vals[c1_idx]):
+        diff = mean_st - st_vals[c1_idx]
+        if diff > 0.02:
+            nige_factors.append(f"ST速い({st_vals[c1_idx]:.2f}s)")
+        elif diff < -0.02:
+            nige_factors.append(f"ST遅め({st_vals[c1_idx]:.2f}s)")
+    if wind_eff > 0 and wind_speed >= 2:
+        nige_factors.append(f"{wind_dir}→イン有利")
+    elif wind_eff < 0 and wind_speed >= 2:
+        nige_factors.append(f"{wind_dir}→イン不利")
+    if is_stabilizer:
+        nige_factors.append("安定板→イン有利")
+    if c1_nige_pct >= 0.60:
+        nige_factors.append(f"逃げ率{c1_nige_pct*100:.0f}%")
+    if is_final:
+        nige_factors.append("優勝戦→イン強化")
+
+    # ── 外枠攻めシナリオ ─────────────────────────────────────────
+    attack_scenarios = []
+    kw = W.get("tenkai_kimarite_weight", 0.4)
+    ww = W.get("tenkai_winprob_weight", 0.3)
+
+    for cp in range(1, 6):  # コース2〜6
+        idx = course_to_idx.get(cp)
+        if idx is None:
+            continue
+        frame = frames[idx]
+        name = str(names[idx]).split()[0] if names[idx] else ""
+        rk = (racer_kimarite or {}).get(frame, {})
+        boat_wp = win_probs[idx] / 100.0
+
+        # ── 差し ──
+        if cp in [1, 2, 3]:  # コース2,3,4
+            sashi_base = rk.get("差し", 0.0) / 100.0
+            sashi_score = sashi_base * kw + boat_wp * ww
+            if _mawari_rank(idx) <= 1:
+                sashi_score += 0.05
+            if cp == 1:  # コース2は差しの本場
+                sashi_score *= 1.3
+            # 1号艇のSTが遅いと差しチャンス
+            if mean_st is not None and not np.isnan(st_vals[c1_idx]):
+                if st_vals[c1_idx] > mean_st + 0.01:
+                    sashi_score *= 1.2
+            # 横風→コース2差し有利
+            if cp == 1 and wind_dir in ["西", "西北西", "北西"] and wind_speed >= 2:
+                sashi_score *= 1.15
+
+            if sashi_score > 0.02:
+                factors = []
+                if sashi_base >= 0.20:
+                    factors.append(f"差し率{sashi_base*100:.0f}%")
+                if _mawari_rank(idx) <= 1:
+                    factors.append("まわり足上位")
+                if mean_st is not None and not np.isnan(st_vals[c1_idx]) and st_vals[c1_idx] > mean_st + 0.01:
+                    factors.append("イン凹み")
+                attack_scenarios.append({
+                    "type": "差し", "course": cp + 1, "idx": idx,
+                    "frame": frame, "name": name, "score": sashi_score,
+                    "factors": factors,
+                })
+
+        # ── まくり ──
+        if cp >= 2:  # コース3〜6
+            makuri_base = rk.get("まくり", 0.0) / 100.0
+            makuri_score = makuri_base * kw + boat_wp * (ww * 0.7)
+            if _chokusen_rank(idx) <= 1:
+                makuri_score += 0.06
+            if not np.isnan(st_vals[idx]) if idx < len(st_vals) else False:
+                if mean_st is not None and (mean_st - st_vals[idx]) > 0.02:
+                    makuri_score *= 1.2
+            if tilts[idx] < -0.5:
+                makuri_score *= 1.15
+            if wind_dir in ["南", "南南東", "南東", "東", "東南東"] and wind_speed >= 2:
+                makuri_score *= 1.1
+            if cp == 3:  # カドまくり
+                makuri_score *= 1.2
+
+            if makuri_score > 0.02:
+                factors = []
+                if makuri_base >= 0.15:
+                    factors.append(f"まくり率{makuri_base*100:.0f}%")
+                if _chokusen_rank(idx) <= 1:
+                    factors.append("直線上位")
+                if tilts[idx] < -0.5:
+                    factors.append(f"チルト{tilts[idx]:.1f}")
+                if cp == 3:
+                    factors.append("カド位置")
+                attack_scenarios.append({
+                    "type": "まくり", "course": cp + 1, "idx": idx,
+                    "frame": frame, "name": name, "score": makuri_score,
+                    "factors": factors,
+                })
+
+        # ── まくり差し ──
+        if cp >= 2:  # コース3〜6
+            ms_base = rk.get("まくり差し", 0.0) / 100.0
+            ms_score = ms_base * kw + boat_wp * (ww * 0.7)
+            if _mawari_rank(idx) <= 1:
+                ms_score += 0.07
+            if cp in [2, 4]:  # コース3, 5がまくり差し好位置
+                ms_score *= 1.15
+
+            if ms_score > 0.02:
+                factors = []
+                if ms_base >= 0.15:
+                    factors.append(f"まくり差し率{ms_base*100:.0f}%")
+                if _mawari_rank(idx) <= 1:
+                    factors.append("まわり足上位")
+                attack_scenarios.append({
+                    "type": "まくり差し", "course": cp + 1, "idx": idx,
+                    "frame": frame, "name": name, "score": ms_score,
+                    "factors": factors,
+                })
+
+    # ── 全シナリオ統合・正規化 ────────────────────────────────────
+    c1_name = str(names[c1_idx]).split()[0] if names[c1_idx] else ""
+    all_scenarios = [{
+        "type": "イン逃げ", "course": 1, "frame": c1_frame,
+        "name": c1_name, "score": nige_score, "factors": nige_factors,
+    }]
+    all_scenarios.extend(attack_scenarios)
+
+    total = sum(s["score"] for s in all_scenarios)
+    if total <= 0:
+        return []
+    for s in all_scenarios:
+        s["probability"] = s["score"] / total
+
+    all_scenarios.sort(key=lambda x: x["probability"], reverse=True)
+
+    # 上位2〜4件を選択
+    min_prob = W.get("tenkai_min_scenario_prob", 0.08)
+    result = all_scenarios[:2]
+    for s in all_scenarios[2:4]:
+        if s["probability"] >= min_prob:
+            result.append(s)
+
+    # ── テキスト生成 ──────────────────────────────────────────────
+    # 最強チャレンジャー（イン逃げ以外で最高確率）
+    top_challenger = None
+    for s in all_scenarios:
+        if s["type"] != "イン逃げ":
+            top_challenger = s
+            break
+
+    for s in result:
+        prob = s["probability"]
+        # 信頼度
+        if prob >= 0.40:
+            s["confidence"] = 3
+        elif prob >= 0.20:
+            s["confidence"] = 2
+        else:
+            s["confidence"] = 1
+
+        c_mark = _CIRCLED[s["course"] - 1]
+        c1_mark = _CIRCLED[0]
+
+        # タイトル
+        if s["type"] == "イン逃げ":
+            if prob >= 0.50:
+                s["title"] = "イン逃げ (鉄板)"
+            elif prob >= 0.35:
+                s["title"] = "イン逃げ (本線)"
+            else:
+                s["title"] = "イン逃げ (やや不安)"
+        else:
+            s["title"] = f"{c_mark}{s['name']}の{s['type']}"
+
+        # 展開の流れテキスト
+        if s["type"] == "イン逃げ":
+            if not top_challenger or nige_score >= 0.55:
+                s["flow"] = f"{c1_mark}{c1_name}がスタート決めて先マイ。そのまま押し切る鉄板レース"
+            else:
+                ch = top_challenger
+                ch_mark = _CIRCLED[ch["course"] - 1]
+                if ch["type"] == "まくり":
+                    s["flow"] = f"{c1_mark}{c1_name}が先マイ。{ch_mark}{ch['name']}がまくりに来るが{c1_mark}粘って逃げ切り"
+                elif ch["type"] == "差し":
+                    s["flow"] = f"{c1_mark}{c1_name}がスタート決めて逃げ。{ch_mark}{ch['name']}が差しを狙うも届かず"
+                else:
+                    s["flow"] = f"{c1_mark}{c1_name}が先マイ。{ch_mark}{ch['name']}のまくり差しを振り切る"
+        elif s["type"] == "差し":
+            s["flow"] = f"{c1_mark}がやや遅れ、{c_mark}{s['name']}が内を差して浮上。{c1_mark}は2着争いへ"
+        elif s["type"] == "まくり":
+            s["flow"] = f"{c_mark}{s['name']}がスタート決めてまくり一撃。{c1_mark}は抵抗するも外から飲み込まれる"
+        elif s["type"] == "まくり差し":
+            s["flow"] = f"{c_mark}{s['name']}がまくり差しで{c1_mark}の内を突く。間を割って先頭に立つ"
+
+        s["winner_frame"] = s["frame"]
+        s["key_factors"] = s.get("factors", [])[:4]
+
+    # 不要キーを除去
+    for s in result:
+        for k in ("score", "idx", "factors"):
+            s.pop(k, None)
+
+    return result
+
+
+# ────────────────────────────────────────────────────────────────
 # メイン呼び出しインターフェース
 # ────────────────────────────────────────────────────────────────
 
@@ -1126,6 +1433,13 @@ def predict(
         scored, odds_2t=odds_2t,
         course_positions=course_positions,
         racer_kimarite=racer_kimarite,
+    )
+
+    # 【v10】展開予想シナリオ生成
+    tenkai_scenarios = generate_tenkai_prediction(
+        scored, weather,
+        racer_kimarite=racer_kimarite,
+        race_no=race_no,
     )
 
     top_boat   = scored.sort_values("win_prob", ascending=False).iloc[0]
@@ -1159,5 +1473,6 @@ def predict(
         "recommendations":    recs,
         "all_3t_candidates":  all_3t,
         "recommendations_2ren": recs_2ren,
+        "tenkai_scenarios":   tenkai_scenarios,
         "summary":            "\n".join(summary_lines),
     }

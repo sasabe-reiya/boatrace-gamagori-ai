@@ -421,6 +421,91 @@ def fetch_full_race_data(
     return final_df, weather
 
 
+def fetch_base_race_data(
+    race_no: int,
+    date_str: str | None = None,
+) -> tuple[pd.DataFrame, dict, BeautifulSoup | None]:
+    """
+    出走表＋直前情報を統合して返す（拡張データなし・Phase 1のみ）。
+    racelist soup も返すので、呼び出し側で deadline 解析や extended 処理に再利用できる。
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f_soup   = executor.submit(_fetch_racelist_soup, race_no, date_str)
+        f_before = executor.submit(fetch_before_info, race_no, date_str)
+        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str)
+
+        racelist_soup = f_soup.result()
+        ex_df, weather = f_before.result()
+        gama_time_df = f_gama.result()
+
+    card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
+    if card_df.empty:
+        return pd.DataFrame(), {}, racelist_soup
+
+    if not ex_df.empty:
+        final_df = pd.merge(card_df, ex_df, on="枠番", how="left")
+    else:
+        final_df = card_df
+        final_df["展示タイム"] = None
+        final_df["チルト"] = 0.0
+        final_df["体重"] = None
+        final_df["周回タイム"] = None
+
+    if not gama_time_df.empty:
+        final_df = pd.merge(final_df, gama_time_df, on="枠番", how="left")
+    else:
+        final_df["展示タイム_gama"] = None
+        final_df["一周タイム"] = None
+        final_df["まわり足タイム"] = None
+        final_df["直線タイム"] = None
+
+    grade_info = fetch_race_grade(race_no, date_str, _soup=racelist_soup)
+    weather["grade"] = grade_info["grade"]
+    weather["is_final"] = grade_info["is_final"]
+    weather["grade_title"] = grade_info["title"]
+
+    return final_df, weather, racelist_soup
+
+
+def apply_extended_data(final_df: pd.DataFrame, ext_data: dict) -> pd.DataFrame:
+    """
+    fetch_extended_player_data() の結果を DataFrame に適用する。
+    （HTTPリクエストなし、データ結合のみ）
+    """
+    if "登録番号" not in final_df.columns:
+        return final_df
+
+    course_win_rates = []
+    for _, row in final_df.iterrows():
+        rno = row.get("登録番号")
+        course = str(int(row["進入コース"])) if pd.notna(row.get("進入コース")) else row["枠番"]
+        cs = ext_data["course_stats"].get(rno, {})
+        cw = cs.get(course, {}).get("win_rate")
+        course_win_rates.append(cw)
+    final_df["コース別1着率"] = course_win_rates
+
+    avg_results = []
+    recent_win_rates = []
+    for _, row in final_df.iterrows():
+        rno = row.get("登録番号")
+        recent = ext_data["recent_results"].get(rno, [])
+        if recent:
+            avg_results.append(round(sum(recent) / len(recent), 2))
+            recent_win_rates.append(
+                round(sum(1 for r in recent if r == 1) / len(recent) * 100, 1)
+            )
+        else:
+            avg_results.append(None)
+            recent_win_rates.append(None)
+    final_df["直近平均着順"] = avg_results
+    final_df["直近勝率"] = recent_win_rates
+
+    return final_df
+
+
 # ─────────────────────────────────────────────
 # 4. 3連単オッズ取得
 # ─────────────────────────────────────────────
@@ -700,7 +785,7 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
 # ─────────────────────────────────────────────
 # 5. 締め切り時刻取得
 # ─────────────────────────────────────────────
-def fetch_deadline(race_no: int, date_str: str | None = None) -> str:
+def fetch_deadline(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None) -> str:
     """
     racelist ページから指定レースの締切予定時刻を取得して返す。
     取得できない場合は "-" を返す。
@@ -719,9 +804,11 @@ def fetch_deadline(race_no: int, date_str: str | None = None) -> str:
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
-    url = f"{BASE_URL}/owpc/pc/race/racelist"
-    params = {"jcd": JYCD, "hd": date_str, "rno": 1}
-    soup = _get_soup(url, params)
+    soup = _soup
+    if not soup:
+        url = f"{BASE_URL}/owpc/pc/race/racelist"
+        params = {"jcd": JYCD, "hd": date_str, "rno": 1}
+        soup = _get_soup(url, params)
     if not soup:
         return "-"
 
@@ -748,6 +835,30 @@ def fetch_deadline(race_no: int, date_str: str | None = None) -> str:
     except Exception as e:
         print(f"[scraper] 締切時刻取得失敗: {e}")
         return "-"
+
+
+# ─────────────────────────────────────────────
+# 5b. 女子選手判定（raceindex の is-lady クラス）
+# ─────────────────────────────────────────────
+def fetch_lady_racers(date_str: str | None = None) -> set[str]:
+    """raceindex ページから女子選手の登録番号セットを返す。"""
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+    soup = _get_soup(f"{BASE_URL}/owpc/pc/race/raceindex",
+                     {"jcd": JYCD, "hd": date_str})
+    if not soup:
+        return set()
+    lady_set: set[str] = set()
+    for lady_div in soup.find_all("div", class_="is-lady"):
+        td = lady_div.find_parent("td")
+        if not td:
+            continue
+        a_tag = td.find("a", href=re.compile(r"toban=(\d+)"))
+        if a_tag:
+            m = re.search(r"toban=(\d+)", a_tag["href"])
+            if m:
+                lady_set.add(m.group(1))
+    return lady_set
 
 
 # ─────────────────────────────────────────────
@@ -1527,11 +1638,12 @@ def fetch_racer_kimarite(
     race_no: int,
     date_str: str,
     df_race_card: pd.DataFrame | None = None,
+    course_map: dict | None = None,
 ) -> dict:
     """
     kyoteibiyori.com の新概念データ API から選手別・枠別の決まり手データを取得する。
 
-    各選手のコース（枠番）における直近6ヶ月の決まり手分布
+    各選手のコース（進入コース）における直近6ヶ月の決まり手分布
     （逃げ/差し/まくり/まくり差し）をパーセンテージで返す。
 
     Parameters
@@ -1539,6 +1651,8 @@ def fetch_racer_kimarite(
     race_no : レース番号 (1-12)
     date_str : 日付文字列 "YYYYMMDD"
     df_race_card : 出走表DataFrame（登録番号を含む）。Noneの場合は内部で取得する。
+    course_map : 展示進入マッピング {枠番文字列: 進入コース番号(1-6)}。
+                 Noneの場合は枠番=コースとして扱う。
 
     Returns
     -------
@@ -1560,7 +1674,7 @@ def fetch_racer_kimarite(
 
     result = {}
 
-    def _fetch_one(frame_no: str, player_no: str):
+    def _fetch_one(frame_no: str, player_no: str, course_no: int):
         """1選手分の決まり手データを取得する。"""
         try:
             reqdata = json.dumps({
@@ -1580,7 +1694,7 @@ def fetch_racer_kimarite(
             if resp.status_code != 200:
                 return frame_no, None
 
-            data = _parse_henko_html(resp.text, int(frame_no))
+            data = _parse_henko_html(resp.text, course_no)
             return frame_no, data
         except Exception as e:
             print(f"[scraper] 選手別決まり手取得エラー ({frame_no}号艇): {e}")
@@ -1593,7 +1707,9 @@ def fetch_racer_kimarite(
             frame_no = str(row.get("枠番", ""))
             player_no = row.get("登録番号")
             if frame_no and player_no:
-                futures.append(executor.submit(_fetch_one, frame_no, str(player_no)))
+                # 展示進入マッピングがあればそのコース、なければ枠番=コース
+                course_no = int(course_map[frame_no]) if course_map and frame_no in course_map else int(frame_no)
+                futures.append(executor.submit(_fetch_one, frame_no, str(player_no), course_no))
 
         for future in as_completed(futures):
             frame_no, data = future.result()
@@ -1601,7 +1717,8 @@ def fetch_racer_kimarite(
                 result[frame_no] = data
 
     if result:
-        print(f"[scraper] 選手別決まり手: {len(result)}名分取得成功")
+        cm_info = " (展示進入反映)" if course_map else ""
+        print(f"[scraper] 選手別決まり手: {len(result)}名分取得成功{cm_info}")
     else:
         print("[scraper] 選手別決まり手: データ取得失敗（フォールバックなし）")
 

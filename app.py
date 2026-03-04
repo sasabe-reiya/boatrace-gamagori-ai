@@ -25,8 +25,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from config import JYNAME
 from race_scraper import (
     fetch_full_race_data,
+    fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
-    fetch_racer_kimarite, fetch_race_result,
+    fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
 )
 from scorer import predict
 from result_tracker import save_prediction
@@ -38,7 +39,7 @@ os.makedirs(_CACHE_DIR, exist_ok=True)
 def _cache_path(race_no, d_str):
     return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}.json")
 
-def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data):
+def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data, lady_racers=None):
     """予想結果をファイルにキャッシュ（セッション切断対策）"""
     try:
         # scored_dfをJSON化可能に変換
@@ -49,6 +50,7 @@ def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t,
             "scored_cols": scored_cols,
             "recommendations": result.get("recommendations", []),
             "all_3t_candidates": result.get("all_3t_candidates", []),
+            "tenkai_scenarios": result.get("tenkai_scenarios", []),
             "weather": weather,
             "deadline": deadline,
             "odds": odds,
@@ -58,6 +60,7 @@ def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t,
             "race_result": race_result_data,
             "race_no": race_no,
             "date_str": d_str,
+            "lady_racers": list(lady_racers) if lady_racers else [],
         }
         with open(_cache_path(race_no, d_str), "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False, default=str)
@@ -78,6 +81,7 @@ def _load_result_cache(race_no, d_str):
             "scored_df": scored_df,
             "recommendations": cache.get("recommendations", []),
             "all_3t_candidates": cache.get("all_3t_candidates", []),
+            "tenkai_scenarios": cache.get("tenkai_scenarios", []),
         }
         return {
             "result": result,
@@ -88,6 +92,7 @@ def _load_result_cache(race_no, d_str):
             "taka": cache.get("taka"),
             "racer_km": cache.get("racer_km"),
             "race_result": cache.get("race_result"),
+            "lady_racers": set(cache.get("lady_racers", [])),
         }
     except Exception:
         return None
@@ -258,7 +263,7 @@ st.markdown('''<div class="main-header">
 </div>''', unsafe_allow_html=True)
 
 # ── セッション初期化 ──────────────────────────────────────────────
-for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km", "race_result"):
+for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km", "race_result", "lady_racers"):
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -280,90 +285,130 @@ if st.session_state.result is None:
         st.session_state.taka        = _cached["taka"]
         st.session_state.racer_km    = _cached["racer_km"]
         st.session_state.race_result = _cached["race_result"]
+        st.session_state.lady_racers = _cached.get("lady_racers", set())
 
 # ── 設定パネル表示フラグ ──────────────────────────────────────────
 if "show_settings" not in st.session_state:
     st.session_state.show_settings = True  # 初回は開いた状態
 
 # ── レース設定パネル（メインエリア） ─────────────────────────────
+# プレースホルダーを使い、予想実行後に即座にたたむ（st.rerun()不要）
+_settings_ph = st.empty()
+
 if st.session_state.result is not None and not st.session_state.show_settings:
     # 予想後で設定非表示: トグルボタンだけ表示
-    st.button("▸ レース設定を開く", use_container_width=True,
-              on_click=lambda: st.session_state.update(show_settings=True))
+    with _settings_ph.container():
+        st.button("▸ レース設定を開く", use_container_width=True,
+                  on_click=lambda: st.session_state.update(show_settings=True))
     race_no = None
     race_date = None
     fetch_btn = False
 else:
     # 初回 or 設定表示中
-    if st.session_state.result is not None:
-        # 予想後: 閉じるボタンを表示
-        st.button("▾ レース設定を閉じる", use_container_width=True,
-                  on_click=lambda: st.session_state.update(show_settings=False))
-    else:
+    with _settings_ph.container():
+        if st.session_state.result is not None:
+            # 予想後: 閉じるボタンを表示
+            st.button("▾ レース設定を閉じる", use_container_width=True,
+                      on_click=lambda: st.session_state.update(show_settings=False))
+        else:
+            st.markdown(
+                '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                'padding:0.8rem 1rem;margin-bottom:0.5rem">'
+                '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">▾ レース設定</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
         st.markdown(
-            '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
-            'padding:0.8rem 1rem;margin-bottom:0.5rem">'
-            '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">▾ レース設定</span>'
-            '</div>',
+            """<style>
+            div[data-testid="stRadio"] > div[role="radiogroup"] {
+                flex-wrap: wrap;
+            }
+            div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+                width: calc(25% - 1rem);
+            }
+            </style>""",
             unsafe_allow_html=True,
         )
-    st.markdown(
-        """<style>
-        div[data-testid="stRadio"] > div[role="radiogroup"] {
-            flex-wrap: wrap;
-        }
-        div[data-testid="stRadio"] > div[role="radiogroup"] > label {
-            width: calc(25% - 1rem);
-        }
-        </style>""",
-        unsafe_allow_html=True,
-    )
-    _saved_race = max(1, min(12, int(st.query_params.get("race", 1))))
-    race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R")
-    if str(race_no) != st.query_params.get("race"):
-        st.query_params["race"] = str(race_no)
-    race_date = st.date_input("開催日", date.today())
-    fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
+        _saved_race = max(1, min(12, int(st.query_params.get("race", 1))))
+        race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R")
+        if str(race_no) != st.query_params.get("race"):
+            st.query_params["race"] = str(race_no)
+        race_date = st.date_input("開催日", date.today())
+        fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
     d_str = race_date.strftime("%Y%m%d")
     progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
-    # 独立した7つのデータ取得を並列実行
-    with ThreadPoolExecutor(max_workers=7) as executor:
-        f_data     = executor.submit(fetch_full_race_data, race_no, d_str, True)
-        f_deadline = executor.submit(fetch_deadline, race_no, d_str)
+    # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
+    # fetch_base_race_data は内部で3並列（soup+beforeinfo+gamagori_time）
+    # その他5リクエストを同時に走らせる
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
         f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
         f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
         f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str)
-        f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str)
         f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
+        f_lady     = executor.submit(fetch_lady_racers, d_str)
 
-        futures_map = {
+        phase1_map = {
             f_data:     "出走表・直前データ",
-            f_deadline: "締切時刻",
             f_odds:     "3連単オッズ",
             f_odds_2tf: "2連単オッズ",
             f_taka:     "高橋アナ予想",
-            f_racer_km: "選手別決まり手",
             f_rresult:  "レース結果",
+            f_lady:     "女子選手情報",
         }
         done_count = 0
-        total_tasks = len(futures_map)
-        for future in as_completed(futures_map):
+        total_tasks = 8  # Phase1: 6 + Phase2: 2
+        for future in as_completed(phase1_map):
             done_count += 1
-            name = futures_map[future]
+            name = phase1_map[future]
             pct = int((done_count / total_tasks) * 60)
             progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})")
 
-        df_raw, weather = f_data.result()
-        deadline = f_deadline.result()
+        df_raw, weather, racelist_soup = f_data.result()
         odds     = f_odds.result()
         odds_2tf = f_odds_2tf.result()
         taka     = f_taka.result()
-        racer_km = f_racer_km.result()
         race_result_data = f_rresult.result()
+        lady_racers = f_lady.result()
+
+    # ── Phase 2: 出走表に依存するリクエストを並列実行 ──────────
+    # deadline は soup を再利用（HTTPリクエスト不要）
+    deadline = fetch_deadline(race_no, d_str, _soup=racelist_soup)
+    if not df_raw.empty and "登録番号" in df_raw.columns:
+        reg_nos = df_raw["登録番号"].tolist()
+        # 展示進入マッピングを構築（進入コースがあれば枠番→進入コース）
+        _course_map = None
+        if "進入コース" in df_raw.columns:
+            _cm = {}
+            for _, _r in df_raw.iterrows():
+                _f = str(_r.get("枠番", ""))
+                _c = _r.get("進入コース")
+                if _f and pd.notna(_c):
+                    _cm[_f] = int(_c)
+            if _cm and _cm != {str(i): i for i in range(1, 7)}:
+                _course_map = _cm  # 枠番順と異なる場合のみ渡す
+        progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_ext      = executor.submit(fetch_extended_player_data, reg_nos)
+            f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str, df_raw, course_map=_course_map)
+
+            phase2_map = {f_ext: "選手コース別成績", f_racer_km: "選手別決まり手"}
+            for future in as_completed(phase2_map):
+                done_count += 1
+                name = phase2_map[future]
+                pct = int((done_count / total_tasks) * 60)
+                progress_bar.progress(pct, text=f"⏳ 選手詳細データ取得中... {name} 完了 ({done_count}/{total_tasks})")
+
+            ext_data = f_ext.result()
+            racer_km = f_racer_km.result()
+
+        df_raw = apply_extended_data(df_raw, ext_data)
+    else:
+        racer_km = fetch_racer_kimarite(race_no, d_str)
 
     odds_2t = odds_2tf.get("2連単", {})
 
@@ -394,6 +439,7 @@ if fetch_btn:
         st.session_state.taka        = taka
         st.session_state.racer_km    = racer_km
         st.session_state.race_result = race_result_data
+        st.session_state.lady_racers = lady_racers
 
         confidence = (
             result["scored_df"]["confidence"].iloc[0]
@@ -411,13 +457,16 @@ if fetch_btn:
         # 結果をファイルキャッシュに保存（セッション切断対策）
         _save_result_cache(
             race_no, d_str, result, weather, deadline,
-            odds, odds_2t, taka, racer_km, race_result_data,
+            odds, odds_2t, taka, racer_km, race_result_data, lady_racers,
         )
 
-        # 設定パネルを閉じる（次回描画時に反映）
+        # 設定パネルを即座にたたむ（プレースホルダー差し替え、st.rerun()不要）
         st.session_state.show_settings = False
-        # 注: st.rerun() はGoogle App内ブラウザ等でセッション切断を
-        # 起こすため使用しない。結果は同一実行内で下に描画される。
+        _settings_ph.empty()
+        with _settings_ph.container():
+            st.button("▸ レース設定を開く", key="settings_open_post",
+                      use_container_width=True,
+                      on_click=lambda: st.session_state.update(show_settings=True))
 
     else:
         progress_bar.progress(100, text="❌ データ取得失敗")
@@ -531,9 +580,10 @@ if st.session_state.result is not None:
                 f'</div>'
             )
         weather_html += '</div>'
-        # 安定板使用バッジ
+        # 安定板使用バッジ / 展示進入変化バッジ
+        _badges_html = ""
         if w.get("安定板"):
-            weather_html += (
+            _badges_html += (
                 '<div style="margin-top:6px">'
                 '<span style="background:#e53935;color:#fff;padding:3px 14px;'
                 'border-radius:12px;font-size:0.85rem;font-weight:bold;'
@@ -542,6 +592,28 @@ if st.session_state.result is not None:
                 'イン有利傾向 / 展示タイム信頼性低下'
                 '</span></div>'
             )
+        # 展示進入が枠番通りでない場合
+        if "進入コース" in scored.columns:
+            _entry_diff = False
+            _entry_parts = []
+            for _, _row in scored.iterrows():
+                _waku = int(_row.get("枠番", 0))
+                _course = _row.get("進入コース")
+                if pd.notna(_course) and int(_course) > 0 and int(_course) != _waku:
+                    _entry_diff = True
+                _entry_parts.append(str(int(_course)) if pd.notna(_course) and int(_course) > 0 else str(_waku))
+            if _entry_diff:
+                _entry_str = " - ".join(_entry_parts)
+                _badges_html += (
+                    '<div style="margin-top:6px">'
+                    '<span style="background:#ff6f00;color:#fff;padding:3px 14px;'
+                    'border-radius:12px;font-size:0.85rem;font-weight:bold;'
+                    'letter-spacing:1px">進入変化</span>'
+                    f'<span style="color:#ffab40;font-size:0.8rem;margin-left:8px">'
+                    f'展示進入: {_entry_str}</span></div>'
+                )
+        if _badges_html:
+            weather_html += _badges_html
         st.markdown(weather_html, unsafe_allow_html=True)
 
     st.markdown("---")
@@ -697,7 +769,12 @@ if st.session_state.result is not None:
         if col in scored.columns:
             extra_cols.append(col)
     # 展示情報をグループ化（展示進入・展示タイム・まわり足・直線T・一周T）
-    if "進入コース" in scored.columns:
+    # 展示タイムが全て未発表のときは進入コースも表示しない
+    _has_exhibit = (
+        "展示タイム" in scored.columns
+        and scored["展示タイム"].apply(lambda x: pd.notnull(x) and x > 0).any()
+    )
+    if "進入コース" in scored.columns and _has_exhibit:
         base_cols.append("進入コース")
     base_cols += ["展示タイム"]
     for col in ["まわり足タイム", "直線タイム", "一周タイム"]:
@@ -725,7 +802,13 @@ if st.session_state.result is not None:
         "一周タイム":         "一周T",
         "F回数":              "F",
     }
-    display_df = scored[display_cols_unique].rename(columns=col_rename)
+    display_df = scored[display_cols_unique].rename(columns=col_rename).copy()
+
+    # 女子選手にハートマークを付与
+    _lady_set = st.session_state.lady_racers or set()
+    if _lady_set and "登録番号" in scored.columns:
+        _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
+        display_df.loc[_lady_mask, "選手名"] = "♥ " + display_df.loc[_lady_mask, "選手名"].astype(str)
 
     fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "蒲郡勝率": "{:.2f}"}
     if "M2連(%)" in display_df.columns:
@@ -796,6 +879,13 @@ if st.session_state.result is not None:
     for ecol in _EXHIBIT_RANK_COLS:
         if ecol in display_df.columns:
             styler = styler.apply(_style_exhibit_rank, subset=[ecol])
+
+    # 女子選手の選手名セルをピンク色に
+    if _lady_set and "登録番号" in scored.columns:
+        _lady_mask_list = scored["登録番号"].astype(str).isin(_lady_set).tolist()
+        def _style_lady_name(col):
+            return ["color: #ff69b4" if _lady_mask_list[i] else "" for i in range(len(col))]
+        styler = styler.apply(_style_lady_name, subset=["選手名"])
 
     # テーブル全体スタイル
     tbl_css = [
@@ -933,6 +1023,86 @@ if st.session_state.result is not None:
         st.markdown("### 🎯 選手別決まり手（コース別）")
         st.caption("選手別決まり手データを取得できませんでした")
 
+    # ── AI展開予想（1マーク） ────────────────────────────────────
+    st.markdown("### 🌊 AI展開予想（1マーク）")
+    st.caption("1マーク旋回時の展開をAIが予測。コース・ST・決まり手傾向・気象条件から算出")
+
+    _tenkai_scenarios = res.get("tenkai_scenarios", [])
+    if _tenkai_scenarios:
+        _TK_BOAT_BADGE = {
+            "①": ("1", "background:#fff;color:#000;border:1px solid #888"),
+            "②": ("2", "background:#000;color:#fff"),
+            "③": ("3", "background:#e74c3c;color:#fff"),
+            "④": ("4", "background:#3498db;color:#fff"),
+            "⑤": ("5", "background:#f1c40f;color:#000"),
+            "⑥": ("6", "background:#2ecc71;color:#fff"),
+        }
+        _TK_FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+        _TK_FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+
+        for _ti, _ts in enumerate(_tenkai_scenarios):
+            stars = "★" * _ts["confidence"] + "☆" * (3 - _ts["confidence"])
+            prob_pct = _ts["probability"] * 100
+            frame = _ts.get("winner_frame", "1")
+
+            if _ti == 0:
+                border_color = "#f0a500"
+                bg = "#1a2744"
+            elif _ti == 1:
+                border_color = "#3498db"
+                bg = "#151f35"
+            else:
+                border_color = "#2a4a80"
+                bg = "#12151e"
+
+            fbg = _TK_FBG.get(frame, "#555")
+            ffg = _TK_FFG.get(frame, "#fff")
+            fborder = "border:1.5px solid #888;" if frame == "1" else ""
+            frame_badge = (
+                f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
+                f'width:24px;height:24px;font-weight:bold;font-size:0.85rem;margin-right:6px">'
+                f'{frame}</span>'
+            )
+
+            flow_html = _ts.get("flow", "")
+            for _bm, (_bd, _bs) in _TK_BOAT_BADGE.items():
+                flow_html = flow_html.replace(
+                    _bm,
+                    f'<span style="display:inline-block;{_bs};border-radius:50%;'
+                    f'width:1.4em;height:1.4em;text-align:center;line-height:1.4em;'
+                    f'font-size:0.85em;font-weight:bold;margin:0 2px">{_bd}</span>'
+                )
+
+            factors_html = ""
+            for _fk in _ts.get("key_factors", []):
+                factors_html += (
+                    f'<span style="display:inline-block;background:#0d3360;border-radius:4px;'
+                    f'padding:1px 6px;font-size:0.7rem;color:#7ab8e8;margin:2px 2px 0 0">{_fk}</span>'
+                )
+
+            st.markdown(
+                f'<div style="background:{bg};border-left:5px solid {border_color};'
+                f'padding:0.8rem 1rem;border-radius:6px;margin:6px 0">'
+                f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+                f'<div style="display:flex;align-items:center">'
+                f'{frame_badge}'
+                f'<span style="color:#ffe066;font-size:0.85rem;font-weight:bold">{_ts["title"]}</span>'
+                f'</div>'
+                f'<div style="text-align:right">'
+                f'<span style="color:#f0a500;font-size:0.85rem">{stars}</span>'
+                f'<span style="color:#7ab8e8;font-size:0.78rem;margin-left:6px">{prob_pct:.0f}%</span>'
+                f'</div>'
+                f'</div>'
+                f'<div style="color:#e8f4ff;font-size:0.85rem;line-height:1.6;margin-bottom:6px">'
+                f'{flow_html}</div>'
+                f'<div>{factors_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("展開予想を生成するのに十分なデータがありません")
+
     # ── 3連単 全組番テーブル（確率順） ──────────────────────────
     st.markdown("### 🎯 3連単 予想")
     all_3t = res.get("all_3t_candidates", [])
@@ -981,21 +1151,23 @@ if st.session_state.result is not None:
                     fg = _FFG.get(p, "#fff")
                     nums_html += (
                         f'<span style="display:inline-block;width:22px;height:22px;'
-                        f'line-height:22px;text-align:center;border-radius:4px;'
+                        f'min-width:22px;line-height:22px;text-align:center;border-radius:4px;'
                         f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
-                        f'margin:0 1px;vertical-align:middle">{p}</span>'
+                        f'margin:0 1px;flex-shrink:0">{p}</span>'
                     )
                 hit_html = ""
                 if _is_hit:
                     hit_html = (
                         '<span style="'
+                        'position:absolute;left:calc(100% + 4px);top:50%;transform:translateY(-50%);'
                         'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
                         'color:#fff;font-weight:bold;font-size:0.65rem;padding:1px 5px;'
-                        'border-radius:8px;margin-left:6px;flex-shrink:0">的中</span>'
+                        'line-height:1;border-radius:8px;white-space:nowrap">的中</span>'
                     )
                 combo_html = (
-                    f'<div style="display:flex;align-items:center;'
-                    f'justify-content:center;white-space:nowrap;gap:2px">'
+                    f'<div style="display:inline-flex;align-items:center;'
+                    f'justify-content:center;gap:2px;'
+                    f'height:22px;position:relative">'
                     f'{nums_html}{hit_html}</div>'
                 )
 
@@ -1027,20 +1199,20 @@ if st.session_state.result is not None:
                 _row_num = start_num + idx
                 _zero_opacity = "opacity:0.35;" if _is_zero else ""
                 prob_str = f'<span style="color:#555">0%</span>' if _is_zero else f'{prob:.2f}%'
+                _td_base = "padding:6px 10px;vertical-align:middle;border-bottom:1px solid #2a4a80"
                 body += (
-                    f'<tr style="background:{row_bg};{row_border}{_zero_opacity}">'
-                    f'<td style="padding:6px 6px;text-align:center;color:#7ab8e8;'
-                    f'font-size:0.78rem;border-bottom:1px solid #2a4a80">{_row_num}</td>'
-                    f'<td style="padding:6px 10px;text-align:center;'
-                    f'border-bottom:1px solid #2a4a80">{combo_html}</td>'
-                    f'<td style="padding:6px 10px;text-align:right;color:#fff;'
-                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{prob_str}</td>'
-                    f'<td style="padding:6px 10px;text-align:right;color:#ffe066;'
-                    f'font-weight:bold;font-size:0.85rem;border-bottom:1px solid #2a4a80">{actual_str}</td>'
-                    f'<td style="padding:6px 10px;text-align:right;color:#7ab8e8;'
-                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{fair:.1f}</td>'
-                    f'<td style="padding:6px 10px;text-align:right;'
-                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{ev_str}</td>'
+                    f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:36px">'
+                    f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
+                    f'font-size:0.78rem">{_row_num}</td>'
+                    f'<td style="{_td_base};text-align:center">{combo_html}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#fff;'
+                    f'font-size:0.85rem">{prob_str}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#ffe066;'
+                    f'font-weight:bold;font-size:0.85rem">{actual_str}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#7ab8e8;'
+                    f'font-size:0.85rem">{fair:.1f}</td>'
+                    f'<td style="{_td_base};text-align:right;'
+                    f'font-size:0.85rem">{ev_str}</td>'
                     f'</tr>'
                 )
             return (

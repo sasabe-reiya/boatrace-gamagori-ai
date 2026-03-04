@@ -59,6 +59,13 @@ SCORE_WEIGHTS = {
     "stabilizer_in_boost":    3.0,    # 安定板使用時のインコース加点
     "stabilizer_equalize":    0.15,   # 安定板使用時のスコア均等化率 (0=無効, 1=完全均等)
     "stabilizer_et_discount": 0.6,    # 安定板使用時の展示タイム重み割引率 (1.0=割引なし)
+    # ── v10 展開予想パラメータ ──
+    "tenkai_st_factor":          2.0,   # ST差の展開影響度
+    "tenkai_wind_factor":        0.05,  # 風向の展開影響度
+    "tenkai_stabilizer_boost":   0.08,  # 安定板によるイン逃げ追加確率
+    "tenkai_kimarite_weight":    0.4,   # 決まり手率の影響度
+    "tenkai_winprob_weight":     0.3,   # 勝率の展開影響度
+    "tenkai_min_scenario_prob":  0.08,  # 3位以下シナリオの最低確率
 }
 
 # ── 蒲郡 進入コース別成績 ──────────────────────────────────────────
