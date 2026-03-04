@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import JYNAME
-import streamlit.components.v1 as components
 from race_scraper import (
     fetch_full_race_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
@@ -29,7 +28,7 @@ from race_scraper import (
 from scorer import predict
 from result_tracker import save_prediction
 
-st.set_page_config(page_title="蒲郡AI予言書", page_icon="📜", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="競艇予想AI レイヤドン", page_icon="🔱", layout="centered", initial_sidebar_state="collapsed")
 
 # ── パスワード認証 ──────────────────────────────────────────────────
 APP_PASSWORD = "sasabe"
@@ -48,7 +47,7 @@ def check_password():
 
     st.markdown(
         '<div style="max-width:400px;margin:80px auto;text-align:center">'
-        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">🧠 蒲郡AI予言書</h2>'
+        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">🔱 競艇予想AI レイヤドン</h2>'
         '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">― GAMAGORI BOATRACE ―</p>'
         '<p style="color:#7ab8e8">アクセスにはパスワードが必要です</p>'
         '</div>',
@@ -73,7 +72,6 @@ if not check_password():
     st.stop()
 
 st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <style>
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
@@ -132,7 +130,7 @@ st.markdown("""
         .stSelectbox, .stDateInput { font-size: 1rem !important; }
 
         /* データテーブルの横スクロール */
-        .stDataFrame { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+        .stDataFrame { overflow-x: auto !important;  }
         .stDataFrame table { font-size: 0.75rem !important; }
         .stDataFrame th, .stDataFrame td { padding: 4px 6px !important; white-space: nowrap !important; }
 
@@ -145,48 +143,48 @@ st.markdown("""
 st.markdown('''<div class="main-header">
   <div class="logo-row">
     <div class="logo-icon">
-      <svg width="46" height="46" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <svg width="50" height="50" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <linearGradient id="brain-glow" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.9"/>
-            <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.7"/>
+          <linearGradient id="trident-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ffd700"/>
+            <stop offset="100%" stop-color="#b8860b"/>
           </linearGradient>
           <linearGradient id="wave-grad" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.9"/>
-            <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.5"/>
+            <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.6"/>
           </linearGradient>
-          <radialGradient id="pulse-glow" cx="50%" cy="40%" r="50%">
-            <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.3"/>
+          <radialGradient id="glow" cx="50%" cy="35%" r="45%">
+            <stop offset="0%" stop-color="#ffd700" stop-opacity="0.2"/>
             <stop offset="100%" stop-color="#4aa3ff" stop-opacity="0"/>
           </radialGradient>
+          <filter id="gold-glow">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
         </defs>
-        <!-- 背景パルス -->
-        <circle cx="50" cy="42" r="38" fill="url(#pulse-glow)"/>
-        <!-- 脳 (AI) -->
-        <path d="M50 18 Q36 18, 30 28 Q24 38, 28 48 Q30 52, 34 54 Q32 58, 34 60 Q36 62, 40 60 Q44 62, 48 58 L50 58 L52 58 Q56 62, 60 60 Q64 62, 66 60 Q68 58, 66 54 Q70 52, 72 48 Q76 38, 70 28 Q64 18, 50 18 Z" fill="url(#brain-glow)" stroke="#7dd3fc" stroke-width="1" opacity="0.9"/>
-        <!-- 脳の溝 -->
-        <path d="M50 22 L50 56" stroke="#0d2855" stroke-width="0.8" opacity="0.5"/>
-        <path d="M38 32 Q44 36, 50 32 Q56 28, 62 32" stroke="#0d2855" stroke-width="0.8" fill="none" opacity="0.4"/>
-        <path d="M36 44 Q42 40, 48 44" stroke="#0d2855" stroke-width="0.7" fill="none" opacity="0.4"/>
-        <path d="M52 44 Q58 40, 64 44" stroke="#0d2855" stroke-width="0.7" fill="none" opacity="0.4"/>
-        <!-- 回路ノード -->
-        <circle cx="38" cy="30" r="1.5" fill="#e0f2fe" opacity="0.8"/>
-        <circle cx="62" cy="30" r="1.5" fill="#e0f2fe" opacity="0.8"/>
-        <circle cx="34" cy="46" r="1.2" fill="#a78bfa" opacity="0.7"/>
-        <circle cx="66" cy="46" r="1.2" fill="#a78bfa" opacity="0.7"/>
-        <circle cx="50" cy="26" r="1.8" fill="#fff" opacity="0.9"/>
-        <!-- 波 (水面) -->
-        <path d="M8 72 Q20 65, 32 72 Q44 79, 56 72 Q68 65, 80 72 Q92 79, 100 72" stroke="url(#wave-grad)" stroke-width="2.5" fill="none" opacity="0.8"/>
-        <path d="M0 80 Q15 74, 30 80 Q45 86, 60 80 Q75 74, 90 80 Q100 84, 100 80" stroke="#4aa3ff" stroke-width="1.5" fill="none" opacity="0.4"/>
-        <path d="M5 87 Q22 82, 40 87 Q58 92, 75 87 Q90 82, 100 87" stroke="#06b6d4" stroke-width="1" fill="none" opacity="0.25"/>
-        <!-- 接続線（脳→波） -->
-        <line x1="40" y1="60" x2="32" y2="72" stroke="#4aa3ff" stroke-width="0.8" opacity="0.4" stroke-dasharray="2,2"/>
-        <line x1="50" y1="58" x2="56" y2="72" stroke="#a78bfa" stroke-width="0.8" opacity="0.4" stroke-dasharray="2,2"/>
-        <line x1="60" y1="60" x2="80" y2="72" stroke="#4aa3ff" stroke-width="0.8" opacity="0.3" stroke-dasharray="2,2"/>
+        <!-- 背景グロー -->
+        <circle cx="50" cy="40" r="38" fill="url(#glow)"/>
+        <!-- トライデント(三叉の槍) -->
+        <g filter="url(#gold-glow)">
+          <!-- 柄 -->
+          <rect x="47" y="28" width="6" height="48" rx="2" fill="url(#trident-grad)"/>
+          <!-- 中央の刃 -->
+          <path d="M50 6 L45 24 L50 20 L55 24 Z" fill="url(#trident-grad)"/>
+          <!-- 左の刃 -->
+          <path d="M32 22 L34 18 L38 28 L42 26 L40 32 L47 30 L47 28 L38 30 L36 24 Z" fill="url(#trident-grad)"/>
+          <!-- 右の刃 -->
+          <path d="M68 22 L66 18 L62 28 L58 26 L60 32 L53 30 L53 28 L62 30 L64 24 Z" fill="url(#trident-grad)"/>
+          <!-- 横棒 -->
+          <rect x="38" y="28" width="24" height="4" rx="1.5" fill="url(#trident-grad)"/>
+        </g>
+        <!-- 波 -->
+        <path d="M5 78 Q18 70, 32 78 Q46 86, 60 78 Q74 70, 88 78 Q96 83, 100 80" stroke="url(#wave-grad)" stroke-width="3" fill="none" opacity="0.8"/>
+        <path d="M0 85 Q16 79, 34 85 Q52 91, 68 85 Q84 79, 100 85" stroke="#4aa3ff" stroke-width="2" fill="none" opacity="0.4"/>
+        <path d="M8 92 Q28 87, 48 92 Q68 97, 88 92" stroke="#06b6d4" stroke-width="1.2" fill="none" opacity="0.25"/>
       </svg>
     </div>
     <div>
-      <h1>蒲郡AI予言書</h1>
+      <h1>競艇予想AI レイヤドン</h1>
       <div class="logo-sub">― GAMAGORI BOATRACE ―</div>
     </div>
   </div>
@@ -207,9 +205,8 @@ if "show_settings" not in st.session_state:
 # ── レース設定パネル（メインエリア） ─────────────────────────────
 if st.session_state.result is not None and not st.session_state.show_settings:
     # 予想後で設定非表示: トグルボタンだけ表示
-    if st.button("▸ レース設定を開く", use_container_width=True):
-        st.session_state.show_settings = True
-        st.rerun()
+    st.button("▸ レース設定を開く", use_container_width=True,
+              on_click=lambda: st.session_state.update(show_settings=True))
     race_no = None
     race_date = None
     fetch_btn = False
@@ -217,9 +214,8 @@ else:
     # 初回 or 設定表示中
     if st.session_state.result is not None:
         # 予想後: 閉じるボタンを表示
-        if st.button("▾ レース設定を閉じる", use_container_width=True):
-            st.session_state.show_settings = False
-            st.rerun()
+        st.button("▾ レース設定を閉じる", use_container_width=True,
+                  on_click=lambda: st.session_state.update(show_settings=False))
     else:
         st.markdown(
             '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
@@ -326,12 +322,13 @@ if fetch_btn:
             pass  # 保存失敗しても予想表示は続行
 
         progress_bar.progress(100, text="✅ 予想完了！")
-        time.sleep(1)
+        time.sleep(0.5)
         progress_bar.empty()
 
-        # 設定パネルを閉じて再描画
+        # 設定パネルを閉じる（次回描画時に反映）
         st.session_state.show_settings = False
-        st.rerun()
+        # 注: st.rerun() はGoogle App内ブラウザ等でセッション切断を
+        # 起こすため使用しない。結果は同一実行内で下に描画される。
 
     else:
         progress_bar.progress(100, text="❌ データ取得失敗")
@@ -378,41 +375,24 @@ if st.session_state.result is not None:
         f'</div>',
         unsafe_allow_html=True,
     )
-    # リアルタイムカウントダウン用 JavaScript
+    # カウントダウン（静的テキスト表示 - iOS互換性のためiframeを廃止）
     if _dl_iso:
-        components.html(
-            f'''<script>
-            (function(){{
-                try {{
-                    var dl = new Date("{_dl_iso}");
-                    var el = window.parent.document.getElementById("header-countdown");
-                    if(!el) return;
-                    function tick(){{
-                        try {{
-                            var diff = dl - new Date();
-                            if(diff <= 0){{
-                                el.textContent = "（締切済み）";
-                                el.style.color = "#7ab8e8";
-                                return;
-                            }}
-                            var m = Math.floor(diff/60000);
-                            var s = Math.floor((diff%60000)/1000);
-                            var pad = s < 10 ? "0"+s : s;
-                            el.textContent = "あと " + m + "分" + pad + "秒";
-                            if(m < 5){{
-                                el.style.color = "#e05c5c";
-                            }} else {{
-                                el.style.color = "#7ab8e8";
-                            }}
-                            setTimeout(tick, 1000);
-                        }} catch(e) {{}}
-                    }}
-                    tick();
-                }} catch(e) {{}}
-            }})();
-            </script>''',
-            height=0,
-        )
+        try:
+            _dl_dt = datetime.fromisoformat(_dl_iso)
+            _remain = _dl_dt - datetime.now()
+            _remain_sec = int(_remain.total_seconds())
+            if _remain_sec > 0:
+                _rm = _remain_sec // 60
+                _rs = _remain_sec % 60
+                _remain_color = "#e05c5c" if _rm < 5 else "#7ab8e8"
+                st.markdown(
+                    f'<div style="text-align:center;margin-top:-6px;margin-bottom:4px">'
+                    f'<span style="color:{_remain_color};font-weight:bold;font-size:0.85rem">'
+                    f'あと {_rm}分{_rs:02d}秒</span></div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
 
     # グレードバッジ + 気象メトリクス
     if st.session_state.weather:
@@ -734,7 +714,7 @@ if st.session_state.result is not None:
         tbl_html = _ecss + tbl_html
 
     st.markdown(
-        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">{tbl_html}</div>',
+        f'<div style="overflow-x:auto;">{tbl_html}</div>',
         unsafe_allow_html=True,
     )
 
@@ -921,7 +901,7 @@ if st.session_state.result is not None:
                     f'</tr>'
                 )
             return (
-                f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
+                f'<div style="overflow-x:auto;">'
                 f'<table style="border-collapse:collapse;width:100%;'
                 f'background:#1a2744;border-radius:8px;overflow:hidden">'
                 f'{hdr}{body}</table></div>'
@@ -1071,7 +1051,7 @@ if st.session_state.result is not None:
             )
             st.markdown(
                 f'<div style="overflow-x:auto;'
-                f'-webkit-overflow-scrolling:touch">{_odds_tbl}</div>',
+                f'">{_odds_tbl}</div>',
                 unsafe_allow_html=True,
             )
 
