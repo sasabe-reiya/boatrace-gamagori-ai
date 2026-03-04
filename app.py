@@ -448,6 +448,28 @@ if st.session_state.result is not None:
         except Exception:
             pass
 
+    # 締め切り判定
+    _is_past_deadline = False
+    if _dl_iso:
+        try:
+            _dl_dt = datetime.fromisoformat(_dl_iso)
+            _remain = _dl_dt - datetime.now()
+            _remain_sec = int(_remain.total_seconds())
+            _is_past_deadline = _remain_sec <= 0
+        except Exception:
+            pass
+
+    if _is_past_deadline:
+        _deadline_html = (
+            f'<div style="color:#e05c5c;font-size:0.85rem;margin-top:4px;font-weight:bold">'
+            f'締め切り済み</div>'
+        )
+    else:
+        _deadline_html = (
+            f'<div style="color:#ff9800;font-size:0.85rem;margin-top:4px">'
+            f'⏰ 締切 {_dl_time}</div>'
+        )
+
     st.markdown(
         f'<div style="background:linear-gradient(135deg,#0d2855,#1a3a6b);'
         f'border:2px solid #f0a500;border-radius:10px;padding:0.8rem 1rem;'
@@ -457,29 +479,22 @@ if st.session_state.result is not None:
         f'<span style="color:#f0a500;font-size:2rem;font-weight:900;letter-spacing:2px">{_rno_disp}R</span>'
         f'<span style="color:#fff;font-size:1rem">{_date_fmt}</span>'
         f'</div>'
-        f'<div style="color:#ff9800;font-size:0.85rem;margin-top:4px">'
-        f'⏰ 締切 {_dl_time}'
-        f'<span id="header-countdown" style="margin-left:8px;font-weight:bold"></span>'
-        f'</div>'
+        f'{_deadline_html}'
         f'</div>',
         unsafe_allow_html=True,
     )
     # カウントダウン（静的テキスト表示 - iOS互換性のためiframeを廃止）
-    if _dl_iso:
+    if _dl_iso and not _is_past_deadline:
         try:
-            _dl_dt = datetime.fromisoformat(_dl_iso)
-            _remain = _dl_dt - datetime.now()
-            _remain_sec = int(_remain.total_seconds())
-            if _remain_sec > 0:
-                _rm = _remain_sec // 60
-                _rs = _remain_sec % 60
-                _remain_color = "#e05c5c" if _rm < 5 else "#7ab8e8"
-                st.markdown(
-                    f'<div style="text-align:center;margin-top:-6px;margin-bottom:4px">'
-                    f'<span style="color:{_remain_color};font-weight:bold;font-size:0.85rem">'
-                    f'あと {_rm}分{_rs:02d}秒</span></div>',
-                    unsafe_allow_html=True,
-                )
+            _rm = _remain_sec // 60
+            _rs = _remain_sec % 60
+            _remain_color = "#e05c5c" if _rm < 5 else "#7ab8e8"
+            st.markdown(
+                f'<div style="text-align:center;margin-top:-6px;margin-bottom:4px">'
+                f'<span style="color:{_remain_color};font-weight:bold;font-size:0.85rem">'
+                f'あと {_rm}分{_rs:02d}秒</span></div>',
+                unsafe_allow_html=True,
+            )
         except Exception:
             pass
 
@@ -761,6 +776,21 @@ if st.session_state.result is not None:
 
     styler = display_df.style
 
+    # M2連(%) の良/悪ハイライト
+    def _style_motor2(col):
+        """モーター2連率: ≥40%=好調(赤), ≤25%=不調(青)"""
+        styles = [""] * len(col)
+        for i, v in enumerate(col):
+            if pd.notnull(v) and v > 0:
+                if v >= 40:
+                    styles[i] = "background-color: rgba(231,76,60,0.45); color: #fff; font-weight: bold"
+                elif v <= 25:
+                    styles[i] = "background-color: rgba(52,152,219,0.45); color: #fff; font-weight: bold"
+        return styles
+
+    if "M2連(%)" in display_df.columns:
+        styler = styler.apply(_style_motor2, subset=["M2連(%)"])
+
     # 展示情報列に1位/2位ハイライト適用（展示進入はランキング対象外）
     _EXHIBIT_RANK_COLS = [c for c in _EXHIBIT_COLS if c != "展示進入"]
     for ecol in _EXHIBIT_RANK_COLS:
@@ -801,6 +831,20 @@ if st.session_state.result is not None:
             f"}}</style>"
         )
         tbl_html = _ecss + tbl_html
+
+    # ポイント列を左寄せにする
+    if "ポイント" in display_df.columns:
+        _point_idx = display_df.columns.get_loc("ポイント")
+        _uuid_m2 = re.search(r'id="(T_[a-zA-Z0-9_]+)"', tbl_html)
+        if _uuid_m2:
+            _tid2 = _uuid_m2.group(1)
+            _pcss = (
+                f"<style>"
+                f"#{_tid2} td.col{_point_idx} {{"
+                f" text-align:left !important;"
+                f"}}</style>"
+            )
+            tbl_html = _pcss + tbl_html
 
     st.markdown(
         f'<div style="overflow-x:auto;">{tbl_html}</div>',
@@ -901,12 +945,13 @@ if st.session_state.result is not None:
         if _rr and _rr.get("払戻", {}).get("3連単"):
             _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
 
-        def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "") -> str:
+        def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
             """3連単テーブルのHTML文字列を生成する。"""
             _th_style = ('background:#0d2855;color:#7ab8e8;padding:8px 10px;'
                          'font-size:0.82rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
             hdr = (
                 f'<tr>'
+                f'<th style="{_th_style};text-align:center;width:30px">#</th>'
                 f'<th style="{_th_style};text-align:center">組番</th>'
                 f'<th style="{_th_style};text-align:right">確率</th>'
                 f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
@@ -943,14 +988,14 @@ if st.session_state.result is not None:
                 hit_html = ""
                 if _is_hit:
                     hit_html = (
-                        '<span style="position:absolute;right:0;top:50%;transform:translateY(-50%);'
+                        '<span style="'
                         'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
                         'color:#fff;font-weight:bold;font-size:0.65rem;padding:1px 5px;'
-                        'border-radius:8px">的中</span>'
+                        'border-radius:8px;margin-left:6px;flex-shrink:0">的中</span>'
                     )
                 combo_html = (
-                    f'<div style="position:relative;display:flex;align-items:center;'
-                    f'justify-content:center;white-space:nowrap">'
+                    f'<div style="display:flex;align-items:center;'
+                    f'justify-content:center;white-space:nowrap;gap:2px">'
                     f'{nums_html}{hit_html}</div>'
                 )
 
@@ -965,22 +1010,31 @@ if st.session_state.result is not None:
                     ev_str = '<span style="color:#555">-</span>'
 
                 # 行背景
+                _is_zero = prob < 0.005
                 if _is_hit:
                     row_bg = "#3a1a0a"
                     row_border = "border-left:3px solid #ff6b00;"
                 elif ev is not None and ev >= 1.0:
                     row_bg = "#12301a"
                     row_border = "border-left:3px solid #2ecc71;"
+                elif _is_zero:
+                    row_bg = "#12151e"
+                    row_border = ""
                 else:
                     row_bg = "#1a2744" if idx % 2 == 0 else "#151f35"
                     row_border = ""
 
+                _row_num = start_num + idx
+                _zero_opacity = "opacity:0.35;" if _is_zero else ""
+                prob_str = f'<span style="color:#555">0%</span>' if _is_zero else f'{prob:.2f}%'
                 body += (
-                    f'<tr style="background:{row_bg};{row_border}">'
+                    f'<tr style="background:{row_bg};{row_border}{_zero_opacity}">'
+                    f'<td style="padding:6px 6px;text-align:center;color:#7ab8e8;'
+                    f'font-size:0.78rem;border-bottom:1px solid #2a4a80">{_row_num}</td>'
                     f'<td style="padding:6px 10px;text-align:center;'
                     f'border-bottom:1px solid #2a4a80">{combo_html}</td>'
                     f'<td style="padding:6px 10px;text-align:right;color:#fff;'
-                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{prob:.2f}%</td>'
+                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{prob_str}</td>'
                     f'<td style="padding:6px 10px;text-align:right;color:#ffe066;'
                     f'font-weight:bold;font-size:0.85rem;border-bottom:1px solid #2a4a80">{actual_str}</td>'
                     f'<td style="padding:6px 10px;text-align:right;color:#7ab8e8;'
@@ -1016,7 +1070,7 @@ if st.session_state.result is not None:
 
         if rest:
             with st.expander(f"▼ 残り {len(rest)} 件を表示"):
-                st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t), unsafe_allow_html=True)
+                st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
 
     # ── 3連単オッズ一覧表 ────────────────────────────────────────
     if odds:
