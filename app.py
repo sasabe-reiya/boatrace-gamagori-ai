@@ -29,7 +29,7 @@ from race_scraper import (
 from scorer import predict
 from result_tracker import save_prediction
 
-st.set_page_config(page_title="舟券錬金術 - 蒲郡", page_icon="⚗️", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="蒲郡AI予言書", page_icon="📜", layout="centered", initial_sidebar_state="collapsed")
 
 # ── パスワード認証 ──────────────────────────────────────────────────
 APP_PASSWORD = "sasabe"
@@ -48,8 +48,8 @@ def check_password():
 
     st.markdown(
         '<div style="max-width:400px;margin:80px auto;text-align:center">'
-        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">⚗️ 蒲郡 舟券錬金術</h2>'
-        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">GAMAGORI ALCHEMIST</p>'
+        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">🧠 蒲郡AI予言書</h2>'
+        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">― GAMAGORI BOATRACE ―</p>'
         '<p style="color:#7ab8e8">アクセスにはパスワードが必要です</p>'
         '</div>',
         unsafe_allow_html=True,
@@ -147,55 +147,47 @@ st.markdown('''<div class="main-header">
     <div class="logo-icon">
       <svg width="46" height="46" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <linearGradient id="flask-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#f0a500" stop-opacity="0.9"/>
-            <stop offset="50%" stop-color="#e08600" stop-opacity="0.8"/>
-            <stop offset="100%" stop-color="#2ecc71" stop-opacity="0.6"/>
+          <linearGradient id="brain-glow" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.7"/>
           </linearGradient>
-          <linearGradient id="flask-glass" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.4"/>
-            <stop offset="100%" stop-color="#1e5fa8" stop-opacity="0.2"/>
+          <linearGradient id="wave-grad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.5"/>
           </linearGradient>
-          <linearGradient id="wave1" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#4aa3ff" stop-opacity="0.8"/>
-            <stop offset="100%" stop-color="#1e5fa8" stop-opacity="0.3"/>
-          </linearGradient>
+          <radialGradient id="pulse-glow" cx="50%" cy="40%" r="50%">
+            <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#4aa3ff" stop-opacity="0"/>
+          </radialGradient>
         </defs>
-        <!-- フラスコ本体 -->
-        <path d="M38 18 L38 40 L20 72 Q18 78, 24 80 L76 80 Q82 78, 80 72 L62 40 L62 18" fill="url(#flask-glass)" stroke="#5cb8ff" stroke-width="1.5"/>
-        <!-- フラスコ口 -->
-        <rect x="35" y="12" width="30" height="8" rx="3" fill="#0d2855" stroke="#5cb8ff" stroke-width="1"/>
-        <!-- 液体 -->
-        <path d="M28 62 Q40 56, 50 62 Q60 68, 72 62 L76 80 Q82 78, 80 72 L76 80 L24 80 Q18 78, 20 72 Z" fill="url(#flask-fill)" opacity="0.8"/>
-        <!-- 泡 -->
-        <circle cx="40" cy="65" r="2.5" fill="#f0a500" opacity="0.6"/>
-        <circle cx="55" cy="60" r="1.8" fill="#2ecc71" opacity="0.5"/>
-        <circle cx="48" cy="58" r="1.5" fill="#ffe066" opacity="0.7"/>
-        <circle cx="60" cy="66" r="2" fill="#f0a500" opacity="0.4"/>
-        <!-- 蒸気・キラキラ -->
-        <path d="M44 12 Q42 5, 44 0" stroke="#ffe066" stroke-width="1" fill="none" opacity="0.6"/>
-        <path d="M50 12 Q50 3, 52 -2" stroke="#f0a500" stroke-width="1.2" fill="none" opacity="0.7"/>
-        <path d="M56 12 Q58 5, 56 0" stroke="#ffe066" stroke-width="1" fill="none" opacity="0.5"/>
-        <!-- キラキラ -->
-        <g opacity="0.8">
-          <line x1="12" y1="30" x2="18" y2="30" stroke="#ffe066" stroke-width="1"/>
-          <line x1="15" y1="27" x2="15" y2="33" stroke="#ffe066" stroke-width="1"/>
-        </g>
-        <g opacity="0.6">
-          <line x1="82" y1="22" x2="88" y2="22" stroke="#ffe066" stroke-width="1"/>
-          <line x1="85" y1="19" x2="85" y2="25" stroke="#ffe066" stroke-width="1"/>
-        </g>
-        <g opacity="0.5">
-          <line x1="78" y1="50" x2="82" y2="50" stroke="#4aa3ff" stroke-width="0.8"/>
-          <line x1="80" y1="48" x2="80" y2="52" stroke="#4aa3ff" stroke-width="0.8"/>
-        </g>
-        <!-- 波（下部） -->
-        <path d="M0 85 Q12 80, 25 85 Q38 90, 50 85 Q62 80, 75 85 Q88 90, 100 85 L100 100 L0 100 Z" fill="url(#wave1)" opacity="0.25"/>
+        <!-- 背景パルス -->
+        <circle cx="50" cy="42" r="38" fill="url(#pulse-glow)"/>
+        <!-- 脳 (AI) -->
+        <path d="M50 18 Q36 18, 30 28 Q24 38, 28 48 Q30 52, 34 54 Q32 58, 34 60 Q36 62, 40 60 Q44 62, 48 58 L50 58 L52 58 Q56 62, 60 60 Q64 62, 66 60 Q68 58, 66 54 Q70 52, 72 48 Q76 38, 70 28 Q64 18, 50 18 Z" fill="url(#brain-glow)" stroke="#7dd3fc" stroke-width="1" opacity="0.9"/>
+        <!-- 脳の溝 -->
+        <path d="M50 22 L50 56" stroke="#0d2855" stroke-width="0.8" opacity="0.5"/>
+        <path d="M38 32 Q44 36, 50 32 Q56 28, 62 32" stroke="#0d2855" stroke-width="0.8" fill="none" opacity="0.4"/>
+        <path d="M36 44 Q42 40, 48 44" stroke="#0d2855" stroke-width="0.7" fill="none" opacity="0.4"/>
+        <path d="M52 44 Q58 40, 64 44" stroke="#0d2855" stroke-width="0.7" fill="none" opacity="0.4"/>
+        <!-- 回路ノード -->
+        <circle cx="38" cy="30" r="1.5" fill="#e0f2fe" opacity="0.8"/>
+        <circle cx="62" cy="30" r="1.5" fill="#e0f2fe" opacity="0.8"/>
+        <circle cx="34" cy="46" r="1.2" fill="#a78bfa" opacity="0.7"/>
+        <circle cx="66" cy="46" r="1.2" fill="#a78bfa" opacity="0.7"/>
+        <circle cx="50" cy="26" r="1.8" fill="#fff" opacity="0.9"/>
+        <!-- 波 (水面) -->
+        <path d="M8 72 Q20 65, 32 72 Q44 79, 56 72 Q68 65, 80 72 Q92 79, 100 72" stroke="url(#wave-grad)" stroke-width="2.5" fill="none" opacity="0.8"/>
+        <path d="M0 80 Q15 74, 30 80 Q45 86, 60 80 Q75 74, 90 80 Q100 84, 100 80" stroke="#4aa3ff" stroke-width="1.5" fill="none" opacity="0.4"/>
+        <path d="M5 87 Q22 82, 40 87 Q58 92, 75 87 Q90 82, 100 87" stroke="#06b6d4" stroke-width="1" fill="none" opacity="0.25"/>
+        <!-- 接続線（脳→波） -->
+        <line x1="40" y1="60" x2="32" y2="72" stroke="#4aa3ff" stroke-width="0.8" opacity="0.4" stroke-dasharray="2,2"/>
+        <line x1="50" y1="58" x2="56" y2="72" stroke="#a78bfa" stroke-width="0.8" opacity="0.4" stroke-dasharray="2,2"/>
+        <line x1="60" y1="60" x2="80" y2="72" stroke="#4aa3ff" stroke-width="0.8" opacity="0.3" stroke-dasharray="2,2"/>
       </svg>
     </div>
     <div>
-      <h1>蒲郡 舟券錬金術</h1>
-      <div class="logo-sub">GAMAGORI ALCHEMIST</div>
+      <h1>蒲郡AI予言書</h1>
+      <div class="logo-sub">― GAMAGORI BOATRACE ―</div>
     </div>
   </div>
   <svg class="logo-wave" viewBox="0 0 1200 30" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
@@ -863,7 +855,7 @@ if st.session_state.result is not None:
                         f'<span style="display:inline-block;width:22px;height:22px;'
                         f'line-height:22px;text-align:center;border-radius:4px;'
                         f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
-                        f'margin:0 1px">{p}</span>'
+                        f'margin:0 1px;vertical-align:middle">{p}</span>'
                     )
                 if _is_hit:
                     combo_html += (
