@@ -930,7 +930,7 @@ def generate_recommendations(
     【v6】決まり手連動着順補正を適用。
     """
     if df_scored.empty or "win_prob" not in df_scored.columns:
-        return []
+        return [], []
 
     if "_raw_prob" in df_scored.columns:
         ability = df_scored["_raw_prob"].values / 100.0

@@ -207,7 +207,7 @@ if "show_settings" not in st.session_state:
 # ── レース設定パネル（メインエリア） ─────────────────────────────
 if st.session_state.result is not None and not st.session_state.show_settings:
     # 予想後で設定非表示: トグルボタンだけ表示
-    if st.button("⚙️ レース設定を開く", use_container_width=True):
+    if st.button("▸ レース設定を開く", use_container_width=True):
         st.session_state.show_settings = True
         st.rerun()
     race_no = None
@@ -217,14 +217,14 @@ else:
     # 初回 or 設定表示中
     if st.session_state.result is not None:
         # 予想後: 閉じるボタンを表示
-        if st.button("⚙️ レース設定を閉じる", use_container_width=True):
+        if st.button("▾ レース設定を閉じる", use_container_width=True):
             st.session_state.show_settings = False
             st.rerun()
     else:
         st.markdown(
             '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
             'padding:0.8rem 1rem;margin-bottom:0.5rem">'
-            '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">⚙️ レース設定</span>'
+            '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">▾ レース設定</span>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -244,7 +244,7 @@ else:
     if str(race_no) != st.query_params.get("race"):
         st.query_params["race"] = str(race_no)
     race_date = st.date_input("開催日", date.today())
-    fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
+    fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
 
 # ── 予想実行 ─────────────────────────────────────────────────────
 if fetch_btn:
@@ -290,12 +290,19 @@ if fetch_btn:
 
     if not df_raw.empty:
         progress_bar.progress(70, text="🧠 AI予想を計算中...")
-        result = predict(
-            df_raw, weather, race_no,
-            taka_data=taka, odds_dict=odds,
-            odds_2t=odds_2t,
-            racer_kimarite=racer_km,
-        )
+        try:
+            result = predict(
+                df_raw, weather, race_no,
+                taka_data=taka, odds_dict=odds,
+                odds_2t=odds_2t,
+                racer_kimarite=racer_km,
+            )
+        except Exception as e:
+            progress_bar.progress(100, text="❌ 予想計算エラー")
+            time.sleep(1)
+            progress_bar.empty()
+            st.error(f"予想計算中にエラーが発生しました: {e}")
+            st.stop()
 
         progress_bar.progress(90, text="💾 予想結果を保存中...")
         st.session_state.result      = result
@@ -313,7 +320,10 @@ if fetch_btn:
             result["scored_df"]["confidence"].iloc[0]
             if "confidence" in result["scored_df"].columns else "-"
         )
-        save_prediction(d_str, race_no, result["recommendations"], weather, confidence)
+        try:
+            save_prediction(d_str, race_no, result["recommendations"], weather, confidence)
+        except Exception:
+            pass  # 保存失敗しても予想表示は続行
 
         progress_bar.progress(100, text="✅ 予想完了！")
         time.sleep(1)
@@ -373,28 +383,32 @@ if st.session_state.result is not None:
         components.html(
             f'''<script>
             (function(){{
-                var dl = new Date("{_dl_iso}");
-                var el = window.parent.document.getElementById("header-countdown");
-                if(!el) return;
-                function tick(){{
-                    var diff = dl - new Date();
-                    if(diff <= 0){{
-                        el.textContent = "（締切済み）";
-                        el.style.color = "#7ab8e8";
-                        return;
+                try {{
+                    var dl = new Date("{_dl_iso}");
+                    var el = window.parent.document.getElementById("header-countdown");
+                    if(!el) return;
+                    function tick(){{
+                        try {{
+                            var diff = dl - new Date();
+                            if(diff <= 0){{
+                                el.textContent = "（締切済み）";
+                                el.style.color = "#7ab8e8";
+                                return;
+                            }}
+                            var m = Math.floor(diff/60000);
+                            var s = Math.floor((diff%60000)/1000);
+                            var pad = s < 10 ? "0"+s : s;
+                            el.textContent = "あと " + m + "分" + pad + "秒";
+                            if(m < 5){{
+                                el.style.color = "#e05c5c";
+                            }} else {{
+                                el.style.color = "#7ab8e8";
+                            }}
+                            setTimeout(tick, 1000);
+                        }} catch(e) {{}}
                     }}
-                    var m = Math.floor(diff/60000);
-                    var s = Math.floor((diff%60000)/1000);
-                    var pad = s < 10 ? "0"+s : s;
-                    el.textContent = "あと " + m + "分" + pad + "秒";
-                    if(m < 5){{
-                        el.style.color = "#e05c5c";
-                    }} else {{
-                        el.style.color = "#7ab8e8";
-                    }}
-                    setTimeout(tick, 1000);
-                }}
-                tick();
+                    tick();
+                }} catch(e) {{}}
             }})();
             </script>''',
             height=0,
@@ -847,22 +861,29 @@ if st.session_state.result is not None:
 
                 # 枠番バッジ
                 parts = combo.split("-")
-                combo_html = ""
+                nums_html = ""
                 for p in parts:
                     bg = _FBG.get(p, "#555")
                     fg = _FFG.get(p, "#fff")
-                    combo_html += (
+                    nums_html += (
                         f'<span style="display:inline-block;width:22px;height:22px;'
                         f'line-height:22px;text-align:center;border-radius:4px;'
                         f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
                         f'margin:0 1px;vertical-align:middle">{p}</span>'
                     )
+                hit_html = ""
                 if _is_hit:
-                    combo_html += (
-                        '<span style="background:linear-gradient(135deg,#ff6b00,#ff2d00);'
-                        'color:#fff;font-weight:bold;font-size:0.7rem;padding:1px 6px;'
-                        'border-radius:8px;margin-left:6px;vertical-align:middle">的中</span>'
+                    hit_html = (
+                        '<span style="position:absolute;right:0;top:50%;transform:translateY(-50%);'
+                        'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
+                        'color:#fff;font-weight:bold;font-size:0.65rem;padding:1px 5px;'
+                        'border-radius:8px">的中</span>'
                     )
+                combo_html = (
+                    f'<div style="position:relative;display:flex;align-items:center;'
+                    f'justify-content:center;white-space:nowrap">'
+                    f'{nums_html}{hit_html}</div>'
+                )
 
                 actual_str = f"{actual:.1f}" if actual is not None else "-"
 
