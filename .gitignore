@@ -17,3 +17,4 @@ test_*.py
 start_app.bat
 app_fetch_patch.py
 *コピー*
+_cache/
