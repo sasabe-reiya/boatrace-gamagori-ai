@@ -89,6 +89,49 @@ WIND_COURSE_EFFECT = {
 }
 
 
+# ────────────────────────────────────────────────────────────────
+# 決まり手連動着順補正マトリクス 【v6新規】
+# CONDITIONAL_PLACEMENT_MATRIX[勝者コース(1-indexed)][決まり手]
+#   -> {2着候補コース(0-indexed): 倍率}
+# 倍率: 1.0=変更なし, >1.0=2着に来やすい, <1.0=来にくい
+#
+# 値の根拠: backtest_data.json 240レース (蒲郡2026年実績) から算出
+#   ratio = P(2着=Y|1着=X) / P(2着=Y) をベイズ縮小 (prior_n=10)
+#   決まり手別データ未取得のため全決まり手共通値を使用
+# ────────────────────────────────────────────────────────────────
+
+# 決まり手ごとに同一値を適用するヘルパー
+def _uniform_kimarite(multipliers: dict, kimarite_list: list) -> dict:
+    return {k: dict(multipliers) for k in kimarite_list}
+
+CONDITIONAL_PLACEMENT_MATRIX = {
+    1: _uniform_kimarite(  # 1コースが勝つ場合 (n=122)
+        {1: 1.37, 2: 1.13, 3: 1.11, 4: 0.96, 5: 0.98},
+        ["逃げ", "差し"],
+    ),
+    2: _uniform_kimarite(  # 2コースが勝つ場合 (n=29)
+        {0: 0.92, 2: 1.49, 3: 1.42, 4: 1.05, 5: 1.58},
+        ["差し", "まくり"],
+    ),
+    3: _uniform_kimarite(  # 3コースが勝つ場合 (n=33)
+        {0: 2.80, 1: 1.16, 3: 0.38, 4: 0.77, 5: 0.63},
+        ["まくり", "まくり差し", "差し"],
+    ),
+    4: _uniform_kimarite(  # 4コースが勝つ場合 (n=26)
+        {0: 1.90, 1: 0.48, 2: 0.76, 4: 2.00, 5: 1.71},
+        ["まくり", "まくり差し", "差し"],
+    ),
+    5: _uniform_kimarite(  # 5コースが勝つ場合 (n=14)
+        {0: 1.23, 1: 1.02, 2: 1.14, 3: 1.23, 5: 0.42},
+        ["まくり", "まくり差し"],
+    ),
+    6: _uniform_kimarite(  # 6コースが勝つ場合 (n=16)
+        {0: 1.38, 1: 0.66, 2: 1.06, 3: 1.63, 4: 0.68},
+        ["まくり", "まくり差し"],
+    ),
+}
+
+
 def _tilt_score(tilt: float, course_idx: int) -> float:
     if course_idx == 0:
         return tilt * 1.5
@@ -120,7 +163,9 @@ def calculate_scores(
     if n == 0:
         return df
 
-    # ── Step 1: コースベース（進入コースがあれば優先して使用） ──────
+    # ── Step 1: コース位置の決定（ベイズモデル） ────────────────────
+    # コース有利度は事前確率(prior)として分離し、個人スコアとベイズ結合する。
+    # これにより、1号艇の選手が弱い場合に勝率が適切に下がるようになる。
     if "進入コース" in df.columns:
         course_positions = []
         for v in df["進入コース"].values:
@@ -129,11 +174,10 @@ def calculate_scores(
                 course_positions.append(max(0, min(pos, 5)))
             except (TypeError, ValueError):
                 course_positions.append(len(course_positions))
-        base = [GAMAGORI_COURSE_WIN_RATE[pos] * 100 for pos in course_positions]
     else:
-        base = [r * 100 for r in GAMAGORI_COURSE_WIN_RATE[:n]]
         course_positions = list(range(n))
-    scores = np.array(base, dtype=float)
+    course_probs = np.array([GAMAGORI_COURSE_WIN_RATE[pos] for pos in course_positions])
+    scores = np.zeros(n, dtype=float)
 
     # ── Step 2: 勝率・2連率複合補正 ──────────────────────────────
     win_rates   = df["全国勝率"].apply(_to_float).values
@@ -165,6 +209,9 @@ def calculate_scores(
     tilts         = df["チルト"].apply(_to_float).values
     valid_mask    = exhibit_times > 0
 
+    # 安定板使用時は展示タイムの信頼性が低下するため重みを削減
+    _stabilizer_et_factor = W.get("stabilizer_et_discount", 0.6) if weather.get("安定板", False) else 1.0
+
     if valid_mask.sum() >= 2:
         et_valid = exhibit_times[valid_mask]
         mean_et  = et_valid.mean()
@@ -175,13 +222,13 @@ def calculate_scores(
             if not valid_mask[i]:
                 continue
             et_z = -(exhibit_times[i] - mean_et) / std_et
-            scores[i] += et_z * W["exhibit_time"]
+            scores[i] += et_z * W["exhibit_time"] * _stabilizer_et_factor
 
             gap_from_best = exhibit_times[i] - best_et
             if gap_from_best == 0.0:
-                scores[i] += W.get("exhibit_top_bonus", 2.0)
+                scores[i] += W.get("exhibit_top_bonus", 2.0) * _stabilizer_et_factor
             elif gap_from_best <= 0.05:
-                scores[i] += W.get("exhibit_top_bonus", 2.0) * 0.5
+                scores[i] += W.get("exhibit_top_bonus", 2.0) * 0.5 * _stabilizer_et_factor
 
             scores[i] += _tilt_score(tilts[i], course_positions[i])
 
@@ -345,14 +392,14 @@ def calculate_scores(
     if is_calm:
         if local_rates[0] >= local_rates.mean():
             scores[0] += W["calm_in_boost"]
-        scores[0] += 1.5
+        # v8: ハードコード加点を廃止（コース事前確率が静水面効果を包含）
 
     # ── Step 5: 波高補正 ─────────────────────────────────────────
     if wave_height >= 10:
         for i in range(n):
             scores[i] += (course_positions[i] - 2.5) * (wave_height / 20.0)
     elif wave_height <= 2:
-        scores[0] += 1.0
+        pass  # v8: ハードコード加点を廃止（コース事前確率が低波効果を包含）
 
     # ── Step 6: 水温補正（機力差） ───────────────────────────────
     water_temp = _parse_temp(weather.get("水温", "15℃"))
@@ -441,6 +488,30 @@ def calculate_scores(
             # fit_score は 0.0〜1.0。0.5を基準に偏差でスコア調整。
             scores[i] += (fit_score - 0.3) * rk_weight
 
+    # ── Step 8e: 安定板使用補正 【v9新規】 ─────────────────────────
+    # 安定板装着時の影響:
+    #   - ターンが安定 → インコースが逃げやすい（1コース有利度UP）
+    #   - 全艇の最高速が低下 → 機力差が縮小（スコア均等化）
+    #   - 展示タイムの信頼性が低下（展示後に装着するケースあり）
+    #   - 荒天条件との複合でさらにイン有利
+    is_stabilizer = weather.get("安定板", False)
+    if is_stabilizer:
+        stab_in_boost = W.get("stabilizer_in_boost", 3.0)
+        stab_equalize = W.get("stabilizer_equalize", 0.15)
+
+        # イン有利強化: 1コースにボーナス、外枠にペナルティ
+        for i in range(n):
+            if course_positions[i] == 0:
+                scores[i] += stab_in_boost
+            elif course_positions[i] == 1:
+                scores[i] += stab_in_boost * 0.2
+            elif course_positions[i] >= 3:
+                scores[i] -= stab_in_boost * 0.15 * (course_positions[i] - 2)
+
+        # スコア均等化: 機力差が縮小するため個人スコアの差を圧縮
+        mean_score = scores.mean()
+        scores = scores * (1.0 - stab_equalize) + mean_score * stab_equalize
+
     # ── Step 9: レース番号・グレード特性補正 【v3拡張】 ────────────
     grade    = weather.get("grade", "一般")
     is_final = weather.get("is_final", False)
@@ -473,16 +544,22 @@ def calculate_scores(
             if f in cs:
                 scores[i] += taka_boost * cs[f]
 
-    # ── Step 11: ソフトマックスで確率変換 ────────────────────────
-    temperature = 28.0
-    exp_s = np.exp((scores - scores.max()) / temperature)
-    probs = (exp_s / exp_s.sum()) * 100.0
+    # ── Step 11: ベイズ結合で確率変換 ─────────────────────────────
+    # 個人スコア → ソフトマックスで個人力確率に変換
+    ind_temp = W.get("individual_temp", 15.0)
+    ind_exp = np.exp((scores - scores.max()) / ind_temp)
+    ind_prob = ind_exp / ind_exp.sum()
+
+    # コース有利度（事前確率）× 個人力（尤度）→ 事後確率
+    combined = course_probs * ind_prob
+    probs = (combined / combined.sum()) * 100.0
 
     # ── 信頼度スコア計算 ─────────────────────────────────────────
     top_prob = probs.max()
     confidence = _calc_confidence(
         top_prob, exhibit_times, local_rates, wind_speed, wave_height,
         grade, course_wr, recent_avg,
+        is_stabilizer=weather.get("安定板", False),
     )
 
     # ── ハイライト理由テキスト生成 ────────────────────────────────
@@ -498,13 +575,14 @@ def calculate_scores(
     df["_raw_prob"]        = probs
     df["highlight_reason"] = reasons
     df["confidence"]       = confidence
+    df["_course_pos"]      = course_positions
 
     return df
 
 
 def _calc_confidence(
     top_prob, exhibit_times, local_rates, wind_speed, wave_height,
-    grade="一般", course_wr=None, recent_avg=None,
+    grade="一般", course_wr=None, recent_avg=None, is_stabilizer=False,
 ) -> str:
     score = 0
 
@@ -539,6 +617,10 @@ def _calc_confidence(
 
     # 【v3追加】高グレードは荒れやすい
     if grade in ("SG", "G1"):
+        score -= 1
+
+    # 【v9追加】安定板使用時は展示データの信頼性低下
+    if is_stabilizer:
         score -= 1
 
     if score >= 8: return "S（非常に高い）"
@@ -586,9 +668,18 @@ def _build_reasons(
     lap_times_1shu = _safe_col(df, "一周タイム")
     recent_wr_arr = _safe_col(df, "直近勝率")
 
+    is_stabilizer = weather.get("安定板", False)
+
     for i in range(n):
         r = []
         ci = course_positions[i] if i < len(course_positions) else i
+
+        # 安定板使用時のコース別理由
+        if is_stabilizer:
+            if ci == 0:
+                r.append("安定板→イン有利強化")
+            elif ci >= 4:
+                r.append("安定板→外枠不利")
 
         # コース特性
         if ci == 0:
@@ -727,13 +818,20 @@ def _build_reasons(
 # Henery モデル（修正 Harville）
 # ────────────────────────────────────────────────────────────────
 
-def _henery_joint_prob(ability: np.ndarray, i: int, j: int, k: int, gamma: float) -> float:
+def _henery_joint_prob(
+    ability: np.ndarray, i: int, j: int, k: int,
+    gamma: float,
+    a_gamma_override: np.ndarray | None = None,
+) -> float:
     """
     Heneryモデルによる3連単結合確率 P(i=1着, j=2着, k=3着) を返す。
 
     標準Harville: P(j=2着|i=1着) = a[j] / (Σa - a[i])
     Henery修正:   P(j=2着|i=1着) = a[j]^γ / Σ_{m≠i} a[m]^γ
       γ < 1 → 2,3着の確率がより均等になる（人気薄の2着が出やすくなる）
+
+    a_gamma_override: 決まり手連動補正済みの ability^γ 配列。
+      渡された場合、2着・3着の条件付き確率をこの配列で計算する。
     """
     n = len(ability)
     total = ability.sum() + 1e-12
@@ -742,7 +840,7 @@ def _henery_joint_prob(ability: np.ndarray, i: int, j: int, k: int, gamma: float
     p1 = ability[i] / total
 
     # 2着確率（Henery修正）: γ乗した能力値で条件付き確率
-    a_gamma = ability ** gamma
+    a_gamma = a_gamma_override if a_gamma_override is not None else ability ** gamma
     rem_1 = sum(a_gamma[m] for m in range(n) if m != i) + 1e-12
     p2_cond = a_gamma[j] / rem_1
 
@@ -753,6 +851,69 @@ def _henery_joint_prob(ability: np.ndarray, i: int, j: int, k: int, gamma: float
     return p1 * p2_cond * p3_cond
 
 
+def _adjusted_ability_for_winner(
+    ability: np.ndarray,
+    winner_idx: int,
+    gamma: float,
+    course_positions: list[int],
+    racer_kimarite: dict | None,
+    frames: np.ndarray,
+) -> np.ndarray:
+    """
+    決まり手連動着順補正 【v6】
+
+    勝者の決まり手傾向に基づいて、2着以降の各艇の ability^γ を調整する。
+    例: 3号艇がまくり傾向 → 4号艇の ability^γ を引き上げ、1,2号艇を引き下げ。
+
+    Returns: 調整済み ability^γ 配列（shape: (n,)）
+    """
+    a_gamma = ability ** gamma
+
+    if not racer_kimarite:
+        return a_gamma
+
+    winner_course = course_positions[winner_idx] + 1  # 1-indexed
+    winner_frame = str(frames[winner_idx])
+    rk = racer_kimarite.get(winner_frame)
+    if not rk:
+        return a_gamma
+
+    course_patterns = CONDITIONAL_PLACEMENT_MATRIX.get(winner_course)
+    if not course_patterns:
+        return a_gamma
+
+    w = W.get("kimarite_placement_weight", 0.5)
+    if w <= 0:
+        return a_gamma
+
+    n = len(ability)
+    adjusted = a_gamma.copy()
+
+    for m in range(n):
+        if m == winner_idx:
+            continue
+        runner_up_course = course_positions[m]  # 0-indexed
+
+        # 各決まり手の割合で加重平均した倍率を計算
+        total_pct = 0.0
+        weighted_mult = 0.0
+        for kimarite_name, mult_dict in course_patterns.items():
+            pct = rk.get(kimarite_name, 0.0)  # 0-100%
+            if pct <= 0:
+                continue
+            mult = mult_dict.get(runner_up_course, 1.0)
+            weighted_mult += pct * mult
+            total_pct += pct
+
+        if total_pct > 0:
+            raw_mult = weighted_mult / total_pct
+            # weight で 1.0 とブレンド (0.5 → 半分の強さで適用)
+            final_mult = 1.0 + (raw_mult - 1.0) * w
+            adjusted[m] *= final_mult
+
+    return adjusted
+
+
 # ────────────────────────────────────────────────────────────────
 # 推奨買い目生成
 # ────────────────────────────────────────────────────────────────
@@ -760,10 +921,13 @@ def _henery_joint_prob(ability: np.ndarray, i: int, j: int, k: int, gamma: float
 def generate_recommendations(
     df_scored: pd.DataFrame,
     odds_dict: dict | None = None,
+    course_positions: list[int] | None = None,
+    racer_kimarite: dict | None = None,
 ) -> list[dict]:
     """
     Henery結合確率で3連単スコアを計算。
     本命3点・対抗3点は確率順、穴3点は期待値ベースで選定。
+    【v6】決まり手連動着順補正を適用。
     """
     if df_scored.empty or "win_prob" not in df_scored.columns:
         return []
@@ -776,15 +940,25 @@ def generate_recommendations(
     n      = len(ability)
     gamma  = W.get("henery_gamma", 0.85)
 
+    # 【v6】各勝者ごとの決まり手連動補正済み ability^γ を事前計算
+    cp = course_positions or list(range(n))
+    adj_cache = {}
+    for i in range(n):
+        adj_cache[i] = _adjusted_ability_for_winner(
+            ability, i, gamma, cp, racer_kimarite, frames,
+        )
+
     candidates = []
     for i in range(n):
+        a_adj = adj_cache[i]
         for j in range(n):
             if j == i:
                 continue
             for k in range(n):
                 if k == i or k == j:
                     continue
-                joint = _henery_joint_prob(ability, i, j, k, gamma)
+                joint = _henery_joint_prob(ability, i, j, k, gamma,
+                                          a_gamma_override=a_adj)
 
                 combo = f"{frames[i]}-{frames[j]}-{frames[k]}"
 
@@ -797,6 +971,7 @@ def generate_recommendations(
                     "総合スコア": round(joint * 1000, 3),
                     "的中確率":  round(joint * 100, 2),
                     "公正オッズ": round(1.0 / joint, 1) if joint > 1e-9 else 9999.0,
+                    "実オッズ":  actual_odds,
                     "1着艇":    frames[i],
                     "2着艇":    frames[j],
                     "3着艇":    frames[k],
@@ -806,15 +981,15 @@ def generate_recommendations(
 
     candidates.sort(key=lambda x: x["総合スコア"], reverse=True)
 
-    # ── 本命 (top 3) ─────────────────────────────────────────────
-    SUB = ["①", "②", "③"]
-    honmei = candidates[:3]
+    # ── 本命 (top 4) ─────────────────────────────────────────────
+    SUB = ["①", "②", "③", "④"]
+    honmei = candidates[:4]
     for i, c in enumerate(honmei):
         c["グループ"] = "本命"
         c["タイプ"]   = f"本命{SUB[i]}"
 
-    # ── 対抗 (4〜6位) ────────────────────────────────────────────
-    taiko = candidates[3:6]
+    # ── 対抗 (5〜8位) ────────────────────────────────────────────
+    taiko = candidates[4:8]
     for i, c in enumerate(taiko):
         c["グループ"] = "対抗"
         c["タイプ"]   = f"対抗{SUB[i]}"
@@ -822,9 +997,14 @@ def generate_recommendations(
     # ── 穴 (期待値ベース選定) 【v3改良】 ─────────────────────────
     # オッズがある場合: 期待値が最も高い買い目を優先
     # オッズがない場合: 従来の1着艇多様化ロジック
-    top6 = honmei + taiko
-    top6_combos = {c["買い目"] for c in top6}
-    rest = [c for c in candidates[6:] if c["買い目"] not in top6_combos]
+    top8 = honmei + taiko
+    top8_combos = {c["買い目"] for c in top8}
+    ana_min_prob = W.get("ana_min_prob", 0.5)  # 穴候補の的中確率下限(%)
+    ana_max_fair_odds = W.get("ana_max_fair_odds", 80)  # 公正オッズ上限
+    rest = [c for c in candidates[8:]
+            if c["買い目"] not in top8_combos
+            and c["的中確率"] >= ana_min_prob
+            and c["公正オッズ"] <= ana_max_fair_odds]
 
     ev_threshold = W.get("ev_threshold", 1.0)
     if odds_dict and any(c.get("期待値") is not None for c in rest):
@@ -838,17 +1018,18 @@ def generate_recommendations(
         ana_pool = high_ev + low_ev + rest_no_ev
     else:
         # 従来ロジック: 1着艇の多様化
-        top6_first = {c["1着艇"] for c in top6}
-        ana_diff = [c for c in rest if c["1着艇"] not in top6_first]
-        ana_same = [c for c in rest if c["1着艇"] in top6_first]
+        top8_first = {c["1着艇"] for c in top8}
+        ana_diff = [c for c in rest if c["1着艇"] not in top8_first]
+        ana_same = [c for c in rest if c["1着艇"] in top8_first]
         ana_pool = ana_diff + ana_same
 
-    ana = ana_pool[:3]
+    ana = ana_pool[:4]
     for i, c in enumerate(ana):
         c["グループ"] = "穴"
         c["タイプ"]   = f"穴{SUB[i]}"
 
-    return honmei + taiko + ana
+    selected = honmei + taiko + ana
+    return selected, candidates
 
 
 # ────────────────────────────────────────────────────────────────
@@ -858,9 +1039,12 @@ def generate_recommendations(
 def generate_2ren_recommendations(
     df_scored: pd.DataFrame,
     odds_2t: dict | None = None,
+    course_positions: list[int] | None = None,
+    racer_kimarite: dict | None = None,
 ) -> dict:
     """
     2連単の推奨買い目を生成する。
+    【v6】決まり手連動着順補正を適用。
 
     Parameters
     ----------
@@ -878,16 +1062,24 @@ def generate_2ren_recommendations(
     total  = ability.sum() + 1e-12
     gamma  = W.get("henery_gamma", 0.85)
 
+    # 【v6】各勝者ごとの決まり手連動補正済み ability^γ を事前計算
+    cp = course_positions or list(range(n))
+    adj_cache = {}
+    for i in range(n):
+        adj_cache[i] = _adjusted_ability_for_winner(
+            ability, i, gamma, cp, racer_kimarite, frames,
+        )
+
     # 2連単: Heneryモデルで P(i=1着, j=2着)
     nitan = []
     for i in range(n):
         p1 = ability[i] / total
-        a_gamma = ability ** gamma
-        rem = sum(a_gamma[m] for m in range(n) if m != i) + 1e-12
+        a_adj = adj_cache[i]
+        rem = sum(a_adj[m] for m in range(n) if m != i) + 1e-12
         for j in range(n):
             if j == i:
                 continue
-            p2_cond = a_gamma[j] / rem
+            p2_cond = a_adj[j] / rem
             joint = p1 * p2_cond
 
             combo = f"{frames[i]}-{frames[j]}"
@@ -921,8 +1113,20 @@ def predict(
     racer_kimarite: dict | None = None,
 ) -> dict:
     scored = calculate_scores(df, weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
-    recs   = generate_recommendations(scored, odds_dict=odds_dict)
-    recs_2ren = generate_2ren_recommendations(scored, odds_2t=odds_2t)
+
+    # 【v6】進入コース情報を取得し、決まり手連動補正に渡す
+    course_positions = scored["_course_pos"].tolist() if "_course_pos" in scored.columns else None
+
+    recs, all_3t = generate_recommendations(
+        scored, odds_dict=odds_dict,
+        course_positions=course_positions,
+        racer_kimarite=racer_kimarite,
+    )
+    recs_2ren = generate_2ren_recommendations(
+        scored, odds_2t=odds_2t,
+        course_positions=course_positions,
+        racer_kimarite=racer_kimarite,
+    )
 
     top_boat   = scored.sort_values("win_prob", ascending=False).iloc[0]
     wind_speed = _parse_wind_speed(weather.get("風速", "?"))
@@ -930,12 +1134,14 @@ def predict(
     confidence = scored["confidence"].iloc[0] if "confidence" in scored.columns else "-"
     grade      = weather.get("grade", "一般")
 
+    is_stabilizer = weather.get("安定板", False)
     summary_lines = [
         f"📍 蒲郡 {race_no}R 予想サマリ",
         f"🏆 グレード: {grade}" + (" / 優勝戦" if weather.get("is_final") else ""),
         f"💨 風速: {weather.get('風速','?')} / 風向: {weather.get('風向','?')} / 天気: {weather.get('天気','?')}",
         f"🌡 気温: {weather.get('気温','?')} / 水温: {weather.get('水温','?')} / 波高: {weather.get('波高','?')}",
-        f"{'🌙 ナイターレース' if is_night else '☀️ デイレース'}",
+        f"{'🌙 ナイターレース' if is_night else '☀️ デイレース'}"
+        + (" / ⚠️ 安定板使用（イン有利・展示信頼性低下）" if is_stabilizer else ""),
         f"🎯 予想信頼度: {confidence}",
         f"🥇 最有力: {top_boat['枠番']}号艇 {top_boat.get('選手名','')} （推定勝率 {top_boat['win_prob']:.1f}%）",
         "",
@@ -951,6 +1157,7 @@ def predict(
     return {
         "scored_df":          scored,
         "recommendations":    recs,
+        "all_3t_candidates":  all_3t,
         "recommendations_2ren": recs_2ren,
         "summary":            "\n".join(summary_lines),
     }

@@ -198,8 +198,13 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
     params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
 
-    weather = {"天気": "-", "気温": "-", "水温": "-", "風速": "0m", "風向": "-", "波高": "0cm"}
+    weather = {"天気": "-", "気温": "-", "水温": "-", "風速": "0m", "風向": "-", "波高": "0cm", "安定板": False}
     if not soup: return pd.DataFrame(), weather
+
+    # ── 安定板使用検出 ──────────────────────────────
+    page_text = soup.get_text()
+    if "安定板使用" in page_text:
+        weather["安定板"] = True
 
     # ── 気象解析 ──────────────────────────────────
     # 実際のHTML構造:
@@ -848,29 +853,47 @@ def fetch_race_grade(race_no: int, date_str: str | None = None, _soup: Beautiful
     if not soup:
         return result
 
-    # グレード: ページタイトルやheading要素から検出
-    page_text = soup.get_text()
+    # タイトル取得
     title_tag = soup.find("h2", class_=re.compile(r"heading2"))
     if title_tag:
         result["title"] = title_tag.get_text(strip=True)
 
-    # グレード判定（優先度順）
-    grade_patterns = [
-        (r"SG|グランプリ|クラシック|オールスター|メモリアル|ダービー|チャレンジカップ", "SG"),
-        (r"G[Ⅰ1I]|GI|周年記念|高松宮記念|ダイヤモンドカップ", "G1"),
-        (r"G[Ⅱ2II]|GII|モーターボート大賞|レディースチャレンジカップ", "G2"),
-        (r"G[Ⅲ3III]|GIII|オールレディース|マスターズリーグ|企業杯", "G3"),
-    ]
-    for pattern, grade in grade_patterns:
-        if re.search(pattern, page_text):
-            result["grade"] = grade
-            break
+    # グレード判定: heading2_title の is-* クラスから検出（ナビ誤マッチ防止）
+    grade_div = soup.find("div", class_=re.compile(r"heading2_title"))
+    if grade_div:
+        cls_str = " ".join(grade_div.get("class", []))
+        grade_class_map = {
+            "is-SG": "SG", "is-G1": "G1", "is-PG1": "G1",
+            "is-G2": "G2", "is-G3": "G3",
+        }
+        for cls_key, grade_val in grade_class_map.items():
+            if cls_key.lower() in cls_str.lower():
+                result["grade"] = grade_val
+                break
+        # is-ippan or no match → default "一般"
 
-    # 優勝戦・準優勝戦検出
-    if re.search(r"優勝戦|ファイナル", page_text):
-        result["is_final"] = True
-    elif race_no == 12:
-        # 最終レースはメインレースの可能性が高い
+    # フォールバック: title16 テキストからも判定
+    if result["grade"] == "一般":
+        t16 = soup.find("h3", class_=re.compile(r"title16"))
+        if t16:
+            t16_text = t16.get_text(strip=True)
+            fallback_patterns = [
+                (r"ＳＧ|SG", "SG"),
+                (r"Ｇ[Ⅰ１1]|G[Ⅰ1]", "G1"),
+                (r"Ｇ[Ⅱ２2]|G[Ⅱ2]", "G2"),
+                (r"Ｇ[Ⅲ３3]|G[Ⅲ3]", "G3"),
+            ]
+            for pattern, grade_val in fallback_patterns:
+                if re.search(pattern, t16_text):
+                    result["grade"] = grade_val
+                    break
+
+    # 優勝戦・準優勝戦検出（title16テキストから限定検索）
+    race_label = ""
+    t16_tag = soup.find("h3", class_=re.compile(r"title16"))
+    if t16_tag:
+        race_label = t16_tag.get_text(strip=True)
+    if re.search(r"優勝戦|ファイナル", race_label):
         result["is_final"] = True
 
     return result
@@ -902,57 +925,60 @@ def fetch_player_course_stats(reg_no: str) -> dict:
 
     stats = {}
     try:
-        # コース別成績テーブルを探す（3連対率テーブル優先）
+        # コース別3連対率テーブルから1着率・2着率・3着率を取得
+        # 実際のHTML構造: 各コース行の <td> 内にCSSバーチャートがあり、
+        #   is-progress span の style="width: X%" が各着順率を表す
+        #   (1着率=is-progress1, 2着率=is-progress2, 3着率=is-progress3)
+        #   テキストラベルは3連対率(合計)のみ表示
         tables = soup.find_all("table")
-        # 3連対率テーブルを優先（進入率テーブルより先にチェック）
-        tables_sorted = sorted(tables, key=lambda t: "3連対" in t.get_text(), reverse=True)
-        for tbl in tables_sorted:
+        for tbl in tables:
             tbl_text = tbl.get_text()
-            if "コース" not in tbl_text:
+            if "3連対" not in tbl_text or "コース" not in tbl_text:
                 continue
             for tr in tbl.find_all("tr"):
-                # コース番号は <th> にある場合と <td> にある場合がある
                 ths = tr.find_all("th")
-                tds = tr.find_all("td")
-
                 course = None
-                # <th> からコース番号を探す
                 for th in ths:
                     th_text = th.get_text(strip=True)
                     course_m = re.fullmatch(r'([1-6])', th_text)
                     if course_m:
                         course = course_m.group(1)
                         break
-                # <td> の先頭からも探す（旧レイアウト対応）
-                if not course and tds:
-                    first_text = tds[0].get_text(strip=True)
-                    course_m = re.fullmatch(r'([1-6])', first_text)
-                    if course_m:
-                        course = course_m.group(1)
-                        tds = tds[1:]  # コース番号セルを除外
-
                 if not course:
                     continue
 
-                # <td> から数値を収集
-                nums = []
-                for td in tds:
-                    v = _to_float(td.get_text(strip=True))
-                    if v is not None:
-                        nums.append(v)
+                # CSSバーチャートから1着率・2着率・3着率を抽出
+                win_rate = None
+                rentai_rate = None
+                progress_spans = tr.find_all("span", class_="is-progress")
+                rates = []
+                for span in progress_spans:
+                    style = span.get("style", "")
+                    m = re.search(r'width:\s*([\d.]+)%', style)
+                    if m:
+                        rates.append(float(m.group(1)))
+                if rates:
+                    win_rate = rates[0]                              # 1着率
+                    rentai_rate = sum(rates[:2]) if len(rates) >= 2 else win_rate  # 2連対率
 
-                if len(nums) >= 3:
-                    stats[course] = {
-                        "starts":      int(nums[0]),
-                        "win_rate":    nums[1],     # 1着率 (%)
-                        "rentai_rate": nums[2],     # 2連対率 (%)
-                    }
-                elif len(nums) >= 1:
-                    # 3連対率のみ表示の場合
+                # フォールバック: テキストラベルから3連対率を取得
+                rentai3 = None
+                label = tr.find("span", class_="table1_progress2Label")
+                if label:
+                    rentai3 = _to_float(label.get_text(strip=True))
+
+                if win_rate is not None:
                     stats[course] = {
                         "starts":      0,
-                        "win_rate":    nums[0],     # 3連対率 (%)
-                        "rentai_rate": nums[0],
+                        "win_rate":    win_rate,
+                        "rentai_rate": rentai_rate or win_rate,
+                    }
+                elif rentai3 is not None:
+                    # CSSから取れなかった場合は3連対率をフォールバック
+                    stats[course] = {
+                        "starts":      0,
+                        "win_rate":    rentai3,
+                        "rentai_rate": rentai3,
                     }
             if stats:
                 break
@@ -1580,3 +1606,149 @@ def fetch_racer_kimarite(
         print("[scraper] 選手別決まり手: データ取得失敗（フォールバックなし）")
 
     return result
+
+
+# ─────────────────────────────────────────────
+# レース結果取得
+# ─────────────────────────────────────────────
+def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
+    """レース結果を取得する。レースが終了していない場合は None を返す。
+
+    Returns:
+        dict with keys:
+            - "着順": list of dict (着, 枠番, 選手名, レースタイム)
+            - "決まり手": str
+            - "払戻": dict (勝式 -> {"組番": str, "払戻金": int, "人気": int})
+        or None if race not finished.
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    url = f"{BASE_URL}/owpc/pc/race/raceresult"
+    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    soup = _get_soup(url, params)
+    if not soup:
+        return None
+
+    # ── 着順テーブル (最初の table.is-w495) ──
+    result_tables = soup.find_all("table", class_="is-w495")
+    if not result_tables:
+        return None
+
+    result_tbl = result_tables[0]
+    headers = [th.get_text(strip=True) for th in result_tbl.find_all("th")]
+    if "着" not in headers:
+        return None
+
+    finishers = []
+    for tbody in result_tbl.find_all("tbody"):
+        tr = tbody.find("tr")
+        if not tr:
+            continue
+        tds = tr.find_all("td")
+        if len(tds) < 3:
+            continue
+        rank_text = tds[0].get_text(strip=True)
+        rank_map = {"１": 1, "２": 2, "３": 3, "４": 4, "５": 5, "６": 6}
+        rank = rank_map.get(rank_text)
+        if rank is None:
+            m = re.search(r'\d+', rank_text)
+            rank = int(m.group()) if m else None
+        if rank is None:
+            continue
+
+        frame_text = tds[1].get_text(strip=True)
+        frame = int(frame_text) if frame_text.isdigit() else None
+
+        name_span = tds[2].find("span", class_=re.compile("is-fs18"))
+        player_name = name_span.get_text(strip=True).replace('\u3000', '') if name_span else ""
+
+        race_time = tds[3].get_text(strip=True) if len(tds) > 3 else ""
+
+        finishers.append({
+            "着": rank, "枠番": frame,
+            "選手名": player_name, "レースタイム": race_time,
+        })
+
+    if not finishers:
+        return None
+
+    # ── 決まり手 ──
+    kimarite = ""
+    for tbl in soup.find_all("table"):
+        ths = [th.get_text(strip=True) for th in tbl.find_all("th")]
+        if "決まり手" in ths:
+            td = tbl.find("td")
+            if td:
+                kimarite = td.get_text(strip=True)
+            break
+
+    # ── 払戻金テーブル ──
+    payouts = {}
+    for tbl in soup.find_all("table", class_="is-w495"):
+        ths = [th.get_text(strip=True) for th in tbl.find_all("th")]
+        if "勝式" not in ths or "払戻金" not in ths:
+            continue
+        current_type = None
+        for tbody in tbl.find_all("tbody"):
+            for tr in tbody.find_all("tr"):
+                tds = tr.find_all("td")
+                if not tds:
+                    continue
+                first_text = tds[0].get_text(strip=True)
+                if first_text in ("3連単", "3連複", "2連単", "2連複", "拡連複", "単勝", "複勝"):
+                    current_type = first_text
+                    combo_td = tds[1] if len(tds) > 1 else None
+                    payout_td = tds[2] if len(tds) > 2 else None
+                    ninki_td = tds[3] if len(tds) > 3 else None
+                else:
+                    combo_td = tds[0] if len(tds) > 0 else None
+                    payout_td = tds[1] if len(tds) > 1 else None
+                    ninki_td = tds[2] if len(tds) > 2 else None
+
+                if not current_type or not combo_td:
+                    continue
+
+                numbers = combo_td.find_all("span", class_=re.compile("numberSet1_number"))
+                separators = combo_td.find_all("span", class_="numberSet1_text")
+                if not numbers:
+                    continue
+                num_strs = [n.get_text(strip=True) for n in numbers]
+                sep_strs = [s.get_text(strip=True) for s in separators]
+                combo = ""
+                for i, n in enumerate(num_strs):
+                    combo += n
+                    if i < len(sep_strs):
+                        combo += sep_strs[i]
+                if not combo:
+                    continue
+
+                payout_val = 0
+                if payout_td:
+                    pt = re.sub(r'[¥\\,\s]', '', payout_td.get_text(strip=True))
+                    m = re.search(r'\d+', pt)
+                    payout_val = int(m.group()) if m else 0
+
+                ninki_val = 0
+                if ninki_td:
+                    m = re.search(r'\d+', ninki_td.get_text(strip=True))
+                    ninki_val = int(m.group()) if m else 0
+
+                if payout_val > 0:
+                    if current_type in payouts and current_type in ("拡連複", "複勝"):
+                        if not isinstance(payouts[current_type], list):
+                            payouts[current_type] = [payouts[current_type]]
+                        payouts[current_type].append({
+                            "組番": combo, "払戻金": payout_val, "人気": ninki_val,
+                        })
+                    else:
+                        payouts[current_type] = {
+                            "組番": combo, "払戻金": payout_val, "人気": ninki_val,
+                        }
+        break
+
+    return {
+        "着順": finishers,
+        "決まり手": kimarite,
+        "払戻": payouts,
+    }

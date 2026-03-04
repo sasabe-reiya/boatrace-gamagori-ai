@@ -24,7 +24,7 @@ import streamlit.components.v1 as components
 from race_scraper import (
     fetch_full_race_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
-    fetch_racer_kimarite,
+    fetch_racer_kimarite, fetch_race_result,
 )
 from scorer import predict
 from result_tracker import save_prediction
@@ -204,7 +204,7 @@ st.markdown('''<div class="main-header">
 </div>''', unsafe_allow_html=True)
 
 # ── セッション初期化 ──────────────────────────────────────────────
-for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km"):
+for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km", "race_result"):
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -236,7 +236,21 @@ else:
             '</div>',
             unsafe_allow_html=True,
         )
-    race_no   = st.radio("レース番号", list(range(1, 13)), index=0, horizontal=True, format_func=lambda x: f"{x}R")
+    st.markdown(
+        """<style>
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            flex-wrap: wrap;
+        }
+        div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+            width: calc(25% - 1rem);
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+    _saved_race = max(1, min(12, int(st.query_params.get("race", 1))))
+    race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R")
+    if str(race_no) != st.query_params.get("race"):
+        st.query_params["race"] = str(race_no)
     race_date = st.date_input("開催日", date.today())
     fetch_btn  = st.button("🔄 予想実行", type="primary", use_container_width=True)
 
@@ -245,14 +259,15 @@ if fetch_btn:
     d_str = race_date.strftime("%Y%m%d")
     progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
-    # 独立した6つのデータ取得を並列実行
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    # 独立した7つのデータ取得を並列実行
+    with ThreadPoolExecutor(max_workers=7) as executor:
         f_data     = executor.submit(fetch_full_race_data, race_no, d_str, True)
         f_deadline = executor.submit(fetch_deadline, race_no, d_str)
         f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
         f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
         f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str)
         f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str)
+        f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
 
         futures_map = {
             f_data:     "出走表・直前データ",
@@ -261,6 +276,7 @@ if fetch_btn:
             f_odds_2tf: "2連単オッズ",
             f_taka:     "高橋アナ予想",
             f_racer_km: "選手別決まり手",
+            f_rresult:  "レース結果",
         }
         done_count = 0
         total_tasks = len(futures_map)
@@ -276,6 +292,7 @@ if fetch_btn:
         odds_2tf = f_odds_2tf.result()
         taka     = f_taka.result()
         racer_km = f_racer_km.result()
+        race_result_data = f_rresult.result()
 
     odds_2t = odds_2tf.get("2連単", {})
 
@@ -289,15 +306,16 @@ if fetch_btn:
         )
 
         progress_bar.progress(90, text="💾 予想結果を保存中...")
-        st.session_state.result   = result
-        st.session_state.weather  = weather
-        st.session_state.deadline = deadline
-        st.session_state.race_no  = race_no
-        st.session_state.date_str = d_str
-        st.session_state.odds     = odds
-        st.session_state.odds_2t  = odds_2t
-        st.session_state.taka     = taka
-        st.session_state.racer_km = racer_km
+        st.session_state.result      = result
+        st.session_state.weather     = weather
+        st.session_state.deadline    = deadline
+        st.session_state.race_no     = race_no
+        st.session_state.date_str    = d_str
+        st.session_state.odds        = odds
+        st.session_state.odds_2t     = odds_2t
+        st.session_state.taka        = taka
+        st.session_state.racer_km    = racer_km
+        st.session_state.race_result = race_result_data
 
         confidence = (
             result["scored_df"]["confidence"].iloc[0]
@@ -324,6 +342,71 @@ if st.session_state.result is not None:
     res    = st.session_state.result
     scored = res["scored_df"]
     odds   = st.session_state.odds or {}
+
+    # ── 予想対象レース ヘッダー ──────────────────────────────────
+    _rno_disp = st.session_state.race_no
+    _dstr = st.session_state.date_str or ""
+    _date_fmt = f"{_dstr[:4]}/{_dstr[4:6]}/{_dstr[6:]}" if len(_dstr) == 8 else _dstr
+    _dl_time = st.session_state.deadline or "-"
+
+    # カウントダウン用: 締切のISO文字列を生成
+    _dl_iso = ""
+    if _dl_time != "-":
+        try:
+            _now = datetime.now()
+            _dl_iso = datetime.strptime(
+                f"{_now.strftime('%Y-%m-%d')} {_dl_time}", "%Y-%m-%d %H:%M"
+            ).isoformat()
+        except Exception:
+            pass
+
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,#0d2855,#1a3a6b);'
+        f'border:2px solid #f0a500;border-radius:10px;padding:0.8rem 1rem;'
+        f'margin-bottom:0.8rem;text-align:center">'
+        f'<div style="color:#7ab8e8;font-size:0.75rem;letter-spacing:2px;margin-bottom:2px">PREDICTION TARGET</div>'
+        f'<div style="display:flex;align-items:center;justify-content:center;gap:10px">'
+        f'<span style="color:#f0a500;font-size:2rem;font-weight:900;letter-spacing:2px">{_rno_disp}R</span>'
+        f'<span style="color:#fff;font-size:1rem">{_date_fmt}</span>'
+        f'</div>'
+        f'<div style="color:#ff9800;font-size:0.85rem;margin-top:4px">'
+        f'⏰ 締切 {_dl_time}'
+        f'<span id="header-countdown" style="margin-left:8px;font-weight:bold"></span>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    # リアルタイムカウントダウン用 JavaScript
+    if _dl_iso:
+        components.html(
+            f'''<script>
+            (function(){{
+                var dl = new Date("{_dl_iso}");
+                var el = window.parent.document.getElementById("header-countdown");
+                if(!el) return;
+                function tick(){{
+                    var diff = dl - new Date();
+                    if(diff <= 0){{
+                        el.textContent = "（締切済み）";
+                        el.style.color = "#7ab8e8";
+                        return;
+                    }}
+                    var m = Math.floor(diff/60000);
+                    var s = Math.floor((diff%60000)/1000);
+                    var pad = s < 10 ? "0"+s : s;
+                    el.textContent = "あと " + m + "分" + pad + "秒";
+                    if(m < 5){{
+                        el.style.color = "#e05c5c";
+                    }} else {{
+                        el.style.color = "#7ab8e8";
+                    }}
+                    setTimeout(tick, 1000);
+                }}
+                tick();
+            }})();
+            </script>''',
+            height=0,
+        )
 
     # グレードバッジ + 気象メトリクス
     if st.session_state.weather:
@@ -358,52 +441,160 @@ if st.session_state.result is not None:
                 f'</div>'
             )
         weather_html += '</div>'
+        # 安定板使用バッジ
+        if w.get("安定板"):
+            weather_html += (
+                '<div style="margin-top:6px">'
+                '<span style="background:#e53935;color:#fff;padding:3px 14px;'
+                'border-radius:12px;font-size:0.85rem;font-weight:bold;'
+                'letter-spacing:1px">安定板使用</span>'
+                '<span style="color:#ff8a80;font-size:0.75rem;margin-left:8px">'
+                'イン有利傾向 / 展示タイム信頼性低下'
+                '</span></div>'
+            )
         st.markdown(weather_html, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # ── 締め切り時刻 ──────────────────────────────────────────────
-    rno = st.session_state.race_no
-    deadline = st.session_state.deadline or "-"
-    remaining_html = ""
-    urgent = False
+    # ── レース結果表示 ────────────────────────────────────────────
+    _race_result = st.session_state.race_result
+    if _race_result:
+        _rno = st.session_state.race_no
+        finishers = _race_result.get("着順", [])
+        kimarite = _race_result.get("決まり手", "")
+        payouts = _race_result.get("払戻", {})
 
-    if deadline != "-":
-        try:
-            now   = datetime.now()
-            dl_dt = datetime.strptime(f"{now.strftime('%Y-%m-%d')} {deadline}", "%Y-%m-%d %H:%M")
-            diff_sec = (dl_dt - now).total_seconds()
-            if diff_sec < 0:
-                remaining_html = '<span class="deadline-remaining ok">締切済み</span>'
-            else:
-                diff_min = int(diff_sec // 60)
-                diff_s   = int(diff_sec % 60)
-                urgent   = diff_min < 5
-                css_cls  = "urgent" if urgent else "ok"
-                remaining_html = (
-                    f'<span class="deadline-remaining {css_cls}">'
-                    f'あと {diff_min}分{diff_s:02d}秒</span>'
-                )
-        except Exception:
-            pass
+        # 3連単の結果組番
+        _result_3t_combo = ""
+        if payouts.get("3連単"):
+            _result_3t_combo = payouts["3連単"]["組番"].replace("-", "-")
 
-    box_cls = "deadline-box deadline-urgent" if urgent else "deadline-box"
-    st.markdown(
-        f'<div class="{box_cls}">'
-        f'<div class="deadline-label">⏰ 締切予定時刻</div>'
-        f'<div class="deadline-time">{deadline}</div>'
-        f'{remaining_html}'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+        # 的中判定: 予想Top10に3連単結果が含まれているか
+        _hit_rank = None
+        all_3t = res.get("all_3t_candidates", [])
+        if _result_3t_combo and all_3t:
+            # 組番フォーマットを統一して比較 (例: "1-2-3")
+            _norm_result = _result_3t_combo.replace("－", "-").replace("ー", "-")
+            for i, cand in enumerate(all_3t[:10]):
+                _norm_cand = cand["買い目"].replace("－", "-").replace("ー", "-")
+                if _norm_result == _norm_cand:
+                    _hit_rank = i + 1
+                    break
+
+        # 枠番カラー
+        _FBG = {"1": "#fff", "2": "#000", "3": "#e74c3c",
+                "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
+        _FFG = {"1": "#000", "2": "#fff", "3": "#fff",
+                "4": "#fff", "5": "#000", "6": "#fff"}
+
+        # 的中バッジ
+        if _hit_rank is not None:
+            _hit_badge = (
+                f'<div style="background:linear-gradient(135deg,#ff6b00,#ff2d00);'
+                f'border-radius:12px;padding:10px 16px;margin-bottom:10px;text-align:center;'
+                f'animation:pulse 1.5s ease-in-out infinite">'
+                f'<span style="font-size:1.8rem;font-weight:900;color:#fff;'
+                f'text-shadow:0 0 20px rgba(255,255,255,0.6)">🎯 的中！</span>'
+                f'<span style="color:#ffe066;font-size:1rem;margin-left:10px;font-weight:bold">'
+                f'予想 {_hit_rank}位</span>'
+                f'</div>'
+                f'<style>@keyframes pulse{{'
+                f'0%,100%{{transform:scale(1)}}50%{{transform:scale(1.02)}}}}</style>'
+            )
+        else:
+            _hit_badge = ""
+
+        # 着順テーブル
+        _finish_rows = ""
+        for f in finishers:
+            _fr = str(f["枠番"]) if f["枠番"] else "-"
+            _bg = _FBG.get(_fr, "#555")
+            _fg = _FFG.get(_fr, "#fff")
+            _border = "border:1.5px solid #888;" if _fr == "1" else ""
+            _frame_badge = (
+                f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                f'background:{_bg};color:{_fg};{_border}border-radius:4px;'
+                f'width:24px;height:24px;font-weight:bold;font-size:0.85rem">{_fr}</span>'
+            )
+            _rank_color = "#FFD700" if f["着"] == 1 else ("#C0C0C0" if f["着"] == 2 else ("#CD7F32" if f["着"] == 3 else "#7ab8e8"))
+            _finish_rows += (
+                f'<tr style="border-bottom:1px solid rgba(30,95,168,0.3)">'
+                f'<td style="padding:5px 8px;text-align:center;color:{_rank_color};'
+                f'font-weight:bold;font-size:1rem">{f["着"]}</td>'
+                f'<td style="padding:5px 8px;text-align:center">{_frame_badge}</td>'
+                f'<td style="padding:5px 8px;color:#e8f4ff;font-size:0.9rem">{f["選手名"]}</td>'
+                f'<td style="padding:5px 8px;color:#7ab8e8;font-size:0.85rem;text-align:right">{f["レースタイム"]}</td>'
+                f'</tr>'
+            )
+
+        # 払戻金表示
+        _payout_rows = ""
+        for _bet_type in ("3連単", "3連複", "2連単", "2連複"):
+            _p = payouts.get(_bet_type)
+            if not _p:
+                continue
+            if isinstance(_p, list):
+                _p = _p[0]
+            # 組番の枠番をカラーバッジ化
+            _combo_display = ""
+            _raw_combo = _p["組番"]
+            for ch in _raw_combo:
+                if ch.isdigit():
+                    _cbg = _FBG.get(ch, "#555")
+                    _cfg = _FFG.get(ch, "#fff")
+                    _cbdr = "border:1px solid #888;" if ch == "1" else ""
+                    _combo_display += (
+                        f'<span style="display:inline-block;width:20px;height:20px;'
+                        f'line-height:20px;text-align:center;border-radius:3px;'
+                        f'background:{_cbg};color:{_cfg};{_cbdr}font-weight:bold;'
+                        f'font-size:0.8rem;margin:0 1px">{ch}</span>'
+                    )
+                else:
+                    _combo_display += f'<span style="color:#7ab8e8;margin:0 2px">{ch}</span>'
+
+            _payout_rows += (
+                f'<tr style="border-bottom:1px solid rgba(30,95,168,0.3)">'
+                f'<td style="padding:4px 8px;color:#7ab8e8;font-size:0.85rem;white-space:nowrap">{_bet_type}</td>'
+                f'<td style="padding:4px 8px">{_combo_display}</td>'
+                f'<td style="padding:4px 8px;color:#ffe066;font-weight:bold;font-size:0.95rem;'
+                f'text-align:right;white-space:nowrap">&yen;{_p["払戻金"]:,}</td>'
+                f'<td style="padding:4px 8px;color:#aaa;font-size:0.8rem;text-align:center">'
+                f'{_p["人気"]}番人気</td>'
+                f'</tr>'
+            )
+
+        st.markdown(
+            f'{_hit_badge}'
+            f'<div style="background:linear-gradient(135deg,#0d1f3c,#162d50);'
+            f'border:2px solid #f0a500;border-radius:10px;padding:12px 14px;margin-bottom:12px">'
+            f'<div style="display:flex;align-items:center;margin-bottom:8px">'
+            f'<span style="font-size:1.2rem;margin-right:6px">🏁</span>'
+            f'<span style="color:#f0a500;font-size:1.1rem;font-weight:bold">{_rno}R レース結果</span>'
+            f'<span style="color:#7ab8e8;font-size:0.8rem;margin-left:auto">決まり手: '
+            f'<b style="color:#ffe066">{kimarite}</b></span>'
+            f'</div>'
+            f'<table style="width:100%;border-collapse:collapse;margin-bottom:10px">'
+            f'<tr style="border-bottom:2px solid #1e5fa8">'
+            f'<th style="padding:4px 8px;color:#7ab8e8;font-size:0.8rem;text-align:center">着</th>'
+            f'<th style="padding:4px 8px;color:#7ab8e8;font-size:0.8rem;text-align:center">枠</th>'
+            f'<th style="padding:4px 8px;color:#7ab8e8;font-size:0.8rem;text-align:left">選手名</th>'
+            f'<th style="padding:4px 8px;color:#7ab8e8;font-size:0.8rem;text-align:right">タイム</th>'
+            f'</tr>{_finish_rows}</table>'
+            f'<div style="border-top:1px solid #1e5fa8;padding-top:8px;margin-top:4px">'
+            f'<div style="color:#7ab8e8;font-size:0.78rem;margin-bottom:4px">払戻金</div>'
+            f'<table style="width:100%;border-collapse:collapse">'
+            f'{_payout_rows}</table>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── 分析データテーブル ────────────────────────────────────────
+    rno = st.session_state.race_no
     st.markdown(f"### 📋 {rno}R 分析データ")
 
     base_cols  = ["枠番", "選手名", "級別"]
     extra_cols = []
-    if "進入コース" in scored.columns:
-        extra_cols.append("進入コース")
     for col in ["F回数", "体重"]:
         if col in scored.columns:
             extra_cols.append(col)
@@ -415,7 +606,9 @@ if st.session_state.result is not None:
     for col in ["コース別1着率", "直近平均着順"]:
         if col in scored.columns:
             extra_cols.append(col)
-    # 展示情報をグループ化（展示タイム・まわり足・直線T・一周T）
+    # 展示情報をグループ化（展示進入・展示タイム・まわり足・直線T・一周T）
+    if "進入コース" in scored.columns:
+        base_cols.append("進入コース")
     base_cols += ["展示タイム"]
     for col in ["まわり足タイム", "直線タイム", "一周タイム"]:
         if col in scored.columns:
@@ -432,9 +625,9 @@ if st.session_state.result is not None:
     col_rename = {
         "win_prob":          "1着確率(%)",
         "highlight_reason":  "ポイント",
-        "進入コース":         "進入",
+        "進入コース":         "展示進入",
         "モーター2連率":      "M2連(%)",
-        "スタートタイミング": "ST",
+        "スタートタイミング": "平均ST",
         "コース別1着率":      "C別1着(%)",
         "直近平均着順":       "直近平均着",
         "まわり足タイム":     "まわり足",
@@ -447,8 +640,8 @@ if st.session_state.result is not None:
     fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "蒲郡勝率": "{:.2f}"}
     if "M2連(%)" in display_df.columns:
         fmt["M2連(%)"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
-    if "ST" in display_df.columns:
-        fmt["ST"] = lambda x: f"{x:.2f}" if pd.notnull(x) else "-"
+    if "平均ST" in display_df.columns:
+        fmt["平均ST"] = lambda x: f"{x:.2f}" if pd.notnull(x) else "-"
     fmt["展示タイム"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "未発表"
     fmt["チルト"]    = lambda x: f"{x:.1f}" if pd.notnull(x) else "-"
     if "C別1着(%)" in display_df.columns:
@@ -465,13 +658,11 @@ if st.session_state.result is not None:
         fmt["体重"] = lambda x: f"{x:.1f}kg" if pd.notnull(x) and x > 0 else "-"
     if "F" in display_df.columns:
         fmt["F"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "0"
-
-    def style_row(row):
-        is_max = row["1着確率(%)"] == display_df["1着確率(%)"].max()
-        return ["background-color: rgba(240,165,0,0.15)" if is_max else ""] * len(row)
+    if "展示進入" in display_df.columns:
+        fmt["展示進入"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "-"
 
     # 展示情報の列名リスト
-    _EXHIBIT_COLS = ["展示タイム", "まわり足", "直線T", "一周T"]
+    _EXHIBIT_COLS = ["展示進入", "展示タイム", "まわり足", "直線T", "一周T"]
 
     def _style_exhibit_rank(col):
         """展示列の1位(赤)・2位(黄)を色付け"""
@@ -493,10 +684,11 @@ if st.session_state.result is not None:
                     styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
         return styles
 
-    styler = display_df.style.apply(style_row, axis=1)
+    styler = display_df.style
 
-    # 展示情報列に1位/2位ハイライト適用
-    for ecol in _EXHIBIT_COLS:
+    # 展示情報列に1位/2位ハイライト適用（展示進入はランキング対象外）
+    _EXHIBIT_RANK_COLS = [c for c in _EXHIBIT_COLS if c != "展示進入"]
+    for ecol in _EXHIBIT_RANK_COLS:
         if ecol in display_df.columns:
             styler = styler.apply(_style_exhibit_rank, subset=[ecol])
 
@@ -543,7 +735,8 @@ if st.session_state.result is not None:
     # ── 選手別決まり手 ────────────────────────────────────────────
     racer_km = st.session_state.racer_km or {}
     if racer_km:
-        with st.expander("🎯 選手別決まり手（コース別）", expanded=False):
+        st.markdown("### 🎯 選手別決まり手（コース別）")
+        if True:
             _KIMARITE_COLORS = {
                 "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
                 "まくり差し": "#2ecc71", "抜き": "#9b59b6", "恵まれ": "#95a5a6",
@@ -618,149 +811,135 @@ if st.session_state.result is not None:
                     unsafe_allow_html=True,
                 )
     else:
-        with st.expander("🎯 選手別決まり手（コース別）", expanded=False):
-            st.caption("選手別決まり手データを取得できませんでした")
+        st.markdown("### 🎯 選手別決まり手（コース別）")
+        st.caption("選手別決まり手データを取得できませんでした")
 
-    # ── 買い目カード（3グループ × 3点） ─────────────────────────
-    st.markdown("### 🎯 推奨3連単")
-    recs = res["recommendations"]
-    if not recs:
+    # ── 3連単 全組番テーブル（確率順） ──────────────────────────
+    st.markdown("### 🎯 3連単 予想")
+    all_3t = res.get("all_3t_candidates", [])
+    if not all_3t:
         st.warning("買い目候補がありません")
     else:
-        # ── カード描画ヘルパー ───────────────────────────────────
-        def _render_bet_card(r: dict, odds_dict: dict, accent: str):
-            """1枚の買い目カードを描画する。accent は枠線色のHEX。"""
-            combo       = r["買い目"]
-            hit_prob    = r["的中確率"]
-            fair_odds   = r["公正オッズ"]
-            bet_type    = r["タイプ"]
-            actual_odds = odds_dict.get(combo)
+        # レース結果の3連単組番を取得（的中マーク用）
+        _rr = st.session_state.race_result
+        _result_combo_3t = ""
+        if _rr and _rr.get("払戻", {}).get("3連単"):
+            _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
 
-            ev = None
-            if actual_odds is not None:
-                ev = round(actual_odds * (hit_prob / 100), 2)
+        def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "") -> str:
+            """3連単テーブルのHTML文字列を生成する。"""
+            _th_style = ('background:#0d2855;color:#7ab8e8;padding:8px 10px;'
+                         'font-size:0.82rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
+            hdr = (
+                f'<tr>'
+                f'<th style="{_th_style};text-align:center">組番</th>'
+                f'<th style="{_th_style};text-align:right">確率</th>'
+                f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
+                f'<th style="{_th_style};text-align:right">公正ｵｯｽﾞ</th>'
+                f'<th style="{_th_style};text-align:right">期待値</th>'
+                f'</tr>'
+            )
+            body = ""
+            _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+            _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+            for idx, c in enumerate(rows):
+                combo = c["買い目"]
+                prob = c["的中確率"]
+                fair = c["公正オッズ"]
+                actual = c.get("実オッズ")
+                ev = c.get("期待値")
 
-            if ev is not None and ev >= 1.0:
-                bg, border = "#12301a", "#2ecc71"
-            else:
-                bg, border = "#1a2744", accent
+                # 的中判定
+                _is_hit = (result_combo and
+                           combo.replace("－", "-").replace("ー", "-") == result_combo)
 
-            odds_html = ""
-            if actual_odds is not None:
-                ev_cls = "ev-positive" if (ev is not None and ev >= 1.0) else "ev-negative"
-                ev_str = f'<span class="{ev_cls}">×{ev:.2f}</span>' if ev is not None else ""
-                odds_html = (
-                    f'<div class="bet-label" style="margin-top:5px">'
-                    f'<span class="odds-tag">実オッズ</span>'
-                    f'<b style="color:#ffe066">{actual_odds:.1f}倍</b>'
-                    f'&nbsp;{ev_str}'
-                    f'</div>'
+                # 枠番バッジ
+                parts = combo.split("-")
+                combo_html = ""
+                for p in parts:
+                    bg = _FBG.get(p, "#555")
+                    fg = _FFG.get(p, "#fff")
+                    combo_html += (
+                        f'<span style="display:inline-block;width:22px;height:22px;'
+                        f'line-height:22px;text-align:center;border-radius:4px;'
+                        f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
+                        f'margin:0 1px">{p}</span>'
+                    )
+                if _is_hit:
+                    combo_html += (
+                        '<span style="background:linear-gradient(135deg,#ff6b00,#ff2d00);'
+                        'color:#fff;font-weight:bold;font-size:0.7rem;padding:1px 6px;'
+                        'border-radius:8px;margin-left:6px;vertical-align:middle">的中</span>'
+                    )
+
+                actual_str = f"{actual:.1f}" if actual is not None else "-"
+
+                if ev is not None:
+                    if ev >= 1.0:
+                        ev_str = f'<span style="color:#2ecc71;font-weight:bold">{ev:.2f}</span>'
+                    else:
+                        ev_str = f'<span style="color:#aaa">{ev:.2f}</span>'
+                else:
+                    ev_str = '<span style="color:#555">-</span>'
+
+                # 行背景
+                if _is_hit:
+                    row_bg = "#3a1a0a"
+                    row_border = "border-left:3px solid #ff6b00;"
+                elif ev is not None and ev >= 1.0:
+                    row_bg = "#12301a"
+                    row_border = "border-left:3px solid #2ecc71;"
+                else:
+                    row_bg = "#1a2744" if idx % 2 == 0 else "#151f35"
+                    row_border = ""
+
+                body += (
+                    f'<tr style="background:{row_bg};{row_border}">'
+                    f'<td style="padding:6px 10px;text-align:center;'
+                    f'border-bottom:1px solid #2a4a80">{combo_html}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;color:#fff;'
+                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{prob:.2f}%</td>'
+                    f'<td style="padding:6px 10px;text-align:right;color:#ffe066;'
+                    f'font-weight:bold;font-size:0.85rem;border-bottom:1px solid #2a4a80">{actual_str}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;color:#7ab8e8;'
+                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{fair:.1f}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;'
+                    f'font-size:0.85rem;border-bottom:1px solid #2a4a80">{ev_str}</td>'
+                    f'</tr>'
                 )
-            else:
-                odds_html = (
-                    '<div class="bet-label" style="margin-top:5px;color:#555">オッズ未公開</div>'
-                )
-
-            st.markdown(
-                f'<div style="background:{bg};border-left:4px solid {border};'
-                f'padding:0.7rem 0.9rem;margin:0.3rem 0;border-radius:6px">'
-                f'<div style="color:#aaa;font-size:0.75rem">{bet_type}</div>'
-                f'<div style="font-size:1.6rem;font-weight:bold;color:#fff;letter-spacing:3px">{combo}</div>'
-                f'<div class="bet-label" style="margin-top:4px">'
-                f'<span class="odds-tag">的中確率</span>{hit_prob:.2f}%'
-                f'&nbsp;&nbsp;<span class="odds-tag">公正オッズ</span>{fair_odds:.1f}倍'
-                f'</div>'
-                f'{odds_html}'
-                f'</div>',
-                unsafe_allow_html=True,
+            return (
+                f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
+                f'<table style="border-collapse:collapse;width:100%;'
+                f'background:#1a2744;border-radius:8px;overflow:hidden">'
+                f'{hdr}{body}</table></div>'
             )
 
-        # ── 買い目グループ: 本命 → 対抗 → 穴（縦積み） ──────
-        GROUP_INFO = [
-            ("本命", "#f0a500"),   # 黄金
-            ("対抗", "#3498db"),   # 青
-            ("穴",   "#e74c3c"),   # 赤
-        ]
-        group_recs = {g: [r for r in recs if r.get("グループ") == g] for g, _ in GROUP_INFO}
+        top10 = all_3t[:10]
+        rest = all_3t[10:]
 
-        for grp, color in GROUP_INFO:
-            cards = group_recs.get(grp, [])
-            if not cards:
-                continue
-            st.markdown(
-                f'<div class="group-header" style="color:{color};'
-                f'border-bottom:2px solid {color}">{grp}</div>',
-                unsafe_allow_html=True,
-            )
-            for r in cards:
-                _render_bet_card(r, odds, color)
+        st.markdown(_render_3t_table(top10, result_combo=_result_combo_3t), unsafe_allow_html=True)
 
         # 凡例
+        _legend_items = '🟢 緑行 = 期待値 ≧ 1.0（バリュー買い目）'
+        if _result_combo_3t:
+            _legend_items += '&nbsp;|&nbsp;🟠 橙行 = 的中'
+        _legend_items += ('&nbsp;|&nbsp;確率: Heneryモデル推定&nbsp;|&nbsp;'
+                          '公正ｵｯｽﾞ: 理論適正倍率')
         st.markdown(
-            '<div style="font-size:0.75rem; color:#666; margin-top:8px">'
-            '🟢 緑枠 = 期待値 &gt; 1.0（バリュー買い目）&nbsp;|&nbsp;'
-            '的中確率: Heneryモデル推定確率&nbsp;|&nbsp;'
-            '公正オッズ: 確率から算出した理論的な適正倍率'
-            '</div>',
+            f'<div style="font-size:0.75rem;color:#666;margin-top:6px">'
+            f'{_legend_items}'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
-    # ── 2連単・2連複 推奨買い目 【v3新規 + オッズ対応】 ─────────────
-    recs_2ren = res.get("recommendations_2ren", {})
-    nitan  = recs_2ren.get("2連単", [])
-    if nitan:
-        st.markdown("### 🎲 2連単 推奨")
-        st.caption("Heneryモデルによる2連単推奨買い目（上位5点）")
-
-        def _render_2ren_card(r2: dict, accent: str):
-            """2連系の1枚のカードを描画する。"""
-            combo     = r2["買い目"]
-            hit_prob  = r2["的中確率"]
-            fair_odds = r2["公正オッズ"]
-            actual    = r2.get("実オッズ")
-            ev        = r2.get("期待値")
-
-            if ev is not None and ev >= 1.0:
-                bg, border = "#12301a", "#2ecc71"
-            else:
-                bg, border = "#1a2744", accent
-
-            odds_html = ""
-            if actual is not None:
-                ev_cls = "ev-positive" if (ev is not None and ev >= 1.0) else "ev-negative"
-                ev_str = f'<span class="{ev_cls}">×{ev:.2f}</span>' if ev is not None else ""
-                odds_html = (
-                    f'<div style="margin-top:3px">'
-                    f'<span class="odds-tag">実オッズ</span>'
-                    f'<b style="color:#ffe066">{actual:.1f}倍</b>'
-                    f'&nbsp;{ev_str}'
-                    f'</div>'
-                )
-
-            st.markdown(
-                f'<div style="background:{bg};border-left:3px solid {border};'
-                f'padding:0.4rem 0.8rem;margin:0.2rem 0;border-radius:6px">'
-                f'<span style="font-size:1.2rem;font-weight:bold;color:#fff;letter-spacing:2px">{combo}</span>'
-                f'&nbsp;&nbsp;<span style="color:#7ab8e8;font-size:0.78rem">'
-                f'{hit_prob:.2f}%</span>'
-                f'&nbsp;<span style="color:#aaa;font-size:0.78rem">'
-                f'({fair_odds:.1f}倍)</span>'
-                f'{odds_html}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(
-            '<div class="group-header" style="color:#f0a500;'
-            'border-bottom:2px solid #f0a500">2連単</div>',
-            unsafe_allow_html=True,
-        )
-        for r2 in nitan:
-            _render_2ren_card(r2, "#f0a500")
+        if rest:
+            with st.expander(f"▼ 残り {len(rest)} 件を表示"):
+                st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t), unsafe_allow_html=True)
 
     # ── 3連単オッズ一覧表 ────────────────────────────────────────
     if odds:
-        with st.expander("📊 3連単オッズ一覧", expanded=False):
+        st.markdown("### 📊 3連単オッズ一覧")
+        if True:
             _OBG = {
                 "1": "#fff", "2": "#000", "3": "#e74c3c",
                 "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
@@ -774,124 +953,108 @@ if st.session_state.result is not None:
                 _rnames[str(int(_rw["枠番"]))] = _rw.get("選手名", "")
 
             _boats = [1, 2, 3, 4, 5, 6]
+            _CB = "border:1px solid #aaa;"
 
-            # ── ヘッダー行（3着＝列ヘッダー） ──
-            _hdr = (
-                '<tr>'
-                '<th colspan="2" style="background:#0d1b2a;color:#7ab8e8;'
-                'padding:6px 4px;font-size:0.7rem;border-bottom:2px solid #1e5fa8;'
-                'text-align:center;white-space:nowrap">1着‑2着</th>'
-            )
+            # 各1着艇ごとの2着候補（昇順）
+            _sec_map = {
+                f: sorted(b for b in _boats if b != f) for f in _boats
+            }
+
+            # ── ヘッダー行（列＝1着艇、各列 colspan=3） ──
+            _hdr = '<tr>'
             for _b in _boats:
                 _bg = _OBG[str(_b)]
                 _fg = _OFG[str(_b)]
-                _bdr = "border:1px solid #888;" if _b == 1 else ""
                 _nm = _rnames.get(str(_b), "")
-                _short = _nm[:3] if len(_nm) > 3 else _nm
                 _hdr += (
-                    f'<th style="background:{_bg};color:{_fg};{_bdr}'
-                    f'padding:6px 2px;font-size:0.68rem;text-align:center;'
-                    f'font-weight:bold;min-width:48px;white-space:nowrap;'
-                    f'border-bottom:2px solid #1e5fa8">'
-                    f'{_b}.{_short}</th>'
+                    f'<th colspan="3" style="{_CB}background:{_bg};'
+                    f'color:{_fg};padding:5px 4px;font-size:0.72rem;'
+                    f'text-align:center;font-weight:bold;'
+                    f'white-space:nowrap">{_b}.{_nm}</th>'
                 )
             _hdr += '</tr>'
 
-            # ── データ行 ──
-            _body = ''
-            for _f in _boats:
-                _secs = [s for s in _boats if s != _f]
-                for _si, _s in enumerate(_secs):
-                    _sep = (
-                        "border-top:2px solid #1e5fa8;"
-                        if _si == 0 and _f > 1 else ""
-                    )
-                    _tr = f'<tr style="{_sep}">'
+            # オッズ値のランキング（低い順トップ2を算出）
+            _all_odds_vals = sorted(set(v for v in odds.values() if v is not None and v > 0))
+            _odds_top1 = _all_odds_vals[0] if len(_all_odds_vals) >= 1 else None
+            _odds_top2 = _all_odds_vals[1] if len(_all_odds_vals) >= 2 else None
 
-                    # 1着セル（グループ先頭のみ rowspan=5）
-                    if _si == 0:
-                        _bg1 = _OBG[str(_f)]
-                        _fg1 = _OFG[str(_f)]
-                        _bdr1 = "border:1px solid #888;" if _f == 1 else ""
+            # ── データ行（5グループ × 4サブ行 = 20行） ──
+            # グループ = 2着艇インデックス、サブ行 = 3着艇インデックス
+            _body = ''
+            for _gi in range(5):
+                for _ri in range(4):
+                    _tr = '<tr>'
+                    for _f in _boats:
+                        _s = _sec_map[_f][_gi]
+                        _thirds = sorted(
+                            b for b in _boats if b != _f and b != _s
+                        )
+                        _t = _thirds[_ri]
+                        _combo = f"{_f}-{_s}-{_t}"
+
+                        # 2着セル（グループ先頭のみ rowspan=4）
+                        if _ri == 0:
+                            _bg2 = _OBG[str(_s)]
+                            _fg2 = _OFG[str(_s)]
+                            _tr += (
+                                f'<td rowspan="4" style="{_CB}'
+                                f'background:{_bg2};color:{_fg2};'
+                                f'text-align:center;font-weight:bold;'
+                                f'font-size:0.78rem;padding:2px 4px;'
+                                f'width:20px;vertical-align:middle">'
+                                f'{_s}</td>'
+                            )
+
+                        # 3着セル
+                        _bg3 = _OBG[str(_t)]
+                        _fg3 = _OFG[str(_t)]
                         _tr += (
-                            f'<td rowspan="5" style="background:{_bg1};'
-                            f'color:{_fg1};{_bdr1}text-align:center;'
-                            f'font-weight:bold;font-size:0.9rem;'
-                            f'padding:2px 6px;vertical-align:middle;'
-                            f'width:26px;border-right:1px solid '
-                            f'rgba(30,95,168,0.3)">{_f}</td>'
+                            f'<td style="{_CB}background:{_bg3};'
+                            f'color:{_fg3};text-align:center;'
+                            f'font-weight:bold;font-size:0.78rem;'
+                            f'padding:2px 4px;width:20px">{_t}</td>'
                         )
 
-                    # 2着セル
-                    _bg2 = _OBG[str(_s)]
-                    _fg2 = _OFG[str(_s)]
-                    _bdr2 = "border:1px solid #888;" if _s == 1 else ""
-                    _tr += (
-                        f'<td style="background:{_bg2};color:{_fg2};{_bdr2}'
-                        f'text-align:center;font-weight:bold;font-size:0.78rem;'
-                        f'padding:2px 4px;width:22px">{_s}</td>'
-                    )
-
-                    # 3着列（6列）
-                    for _t in _boats:
-                        if _t == _f:
-                            # 1着=3着 → 先頭行のみ rowspan=5 でブランク
-                            if _si == 0:
-                                _tr += (
-                                    f'<td rowspan="5" style="background:'
-                                    f'{_OBG[str(_f)]};opacity:0.2"></td>'
-                                )
-                        elif _t == _s:
-                            # 2着=3着 → 単一ブランク
-                            _tr += (
-                                f'<td style="background:{_OBG[str(_s)]};'
-                                f'opacity:0.2"></td>'
-                            )
-                        else:
-                            _combo = f"{_f}-{_s}-{_t}"
-                            _oval = odds.get(_combo)
-                            if _oval is not None:
-                                if _oval < 10:
-                                    _cbg = "rgba(231,76,60,0.25)"
-                                    _cfg = "#ff6b6b"
-                                    _cfw = "bold"
-                                elif _oval < 30:
-                                    _cbg = "rgba(241,196,15,0.12)"
-                                    _cfg = "#ffe066"
-                                    _cfw = "bold"
-                                elif _oval < 100:
-                                    _cbg = "transparent"
-                                    _cfg = "#e8f4ff"
-                                    _cfw = "normal"
-                                elif _oval >= 999.9:
-                                    _cbg = "transparent"
-                                    _cfg = "#444"
-                                    _cfw = "normal"
-                                else:
-                                    _cbg = "transparent"
-                                    _cfg = "#888"
-                                    _cfw = "normal"
-                                _ostr = f"{_oval:.1f}"
-                                _tr += (
-                                    f'<td style="background:{_cbg};'
-                                    f'color:{_cfg};text-align:right;'
-                                    f'font-size:0.73rem;padding:2px 4px;'
-                                    f'font-weight:{_cfw};white-space:nowrap;'
-                                    f'border-bottom:1px solid '
-                                    f'rgba(30,95,168,0.1)">{_ostr}</td>'
-                                )
+                        # オッズセル（1番人気=赤、2番人気=黄、999倍以上=紫で強調）
+                        _oval = odds.get(_combo)
+                        if _oval is not None:
+                            _ostr = f"{_oval:.1f}"
+                            if _oval == _odds_top1:
+                                _ocss = (f'{_CB}background:#fff;'
+                                         f'color:#e74c3c;text-align:right;'
+                                         f'font-size:0.78rem;padding:2px 6px;'
+                                         f'white-space:nowrap;font-weight:bold')
+                            elif _oval == _odds_top2:
+                                _ocss = (f'{_CB}background:#fff;'
+                                         f'color:#f39c12;text-align:right;'
+                                         f'font-size:0.78rem;padding:2px 6px;'
+                                         f'white-space:nowrap;font-weight:bold')
+                            elif _oval >= 999:
+                                _ocss = (f'{_CB}background:#fff;'
+                                         f'color:#8e44ad;text-align:right;'
+                                         f'font-size:0.78rem;padding:2px 6px;'
+                                         f'white-space:nowrap;font-weight:bold')
                             else:
-                                _tr += (
-                                    '<td style="text-align:right;color:#333;'
-                                    'font-size:0.73rem;padding:2px 4px">-</td>'
-                                )
+                                _ocss = (f'{_CB}background:#fff;'
+                                         f'color:#000;text-align:right;'
+                                         f'font-size:0.78rem;padding:2px 6px;'
+                                         f'white-space:nowrap')
+                            _tr += f'<td style="{_ocss}">{_ostr}</td>'
+                        else:
+                            _tr += (
+                                f'<td style="{_CB}background:#fff;'
+                                f'color:#999;text-align:right;'
+                                f'font-size:0.78rem;padding:2px 6px">'
+                                f'-</td>'
+                            )
 
                     _tr += '</tr>'
                     _body += _tr
 
             _odds_tbl = (
                 f'<table style="border-collapse:collapse;width:100%;'
-                f'background:#0d1b2a">{_hdr}{_body}</table>'
+                f'background:#fff">{_hdr}{_body}</table>'
             )
             st.markdown(
                 f'<div style="overflow-x:auto;'
@@ -913,14 +1076,14 @@ if st.session_state.result is not None:
             ("展示タイム", "展示タイム", True),
             ("モーター2連率", "モーター",  False),
             ("スタートタイミング", "ST速さ", True),
-            ("win_prob",   "1着確率",    False),
+            ("全国勝率",   "全国勝率",    False),
             ("コース別1着率", "C別1着率", False),
             ("直近平均着順", "好調度", True),    # 低いほど好調→反転
         ]
 
-        # 各次元の有効値を0-100正規化
+        # 各次元の有効値を0-100正規化（欠損値は除外して正規化）
         # 競艇公式カラー: 1白, 2黒, 3赤, 4青, 5黄, 6緑
-        boat_colors = ["#ffffff", "#000000", "#e74c3c", "#2563eb", "#f1c40f", "#2ecc71"]
+        boat_colors = ["#888888", "#222222", "#e74c3c", "#2563eb", "#d4a017", "#2ecc71"]
         radar_dims: list[str] = []
         radar_data: dict[str, list[float]] = {}  # frame -> normalized values per dim
 
@@ -936,18 +1099,21 @@ if st.session_state.result is not None:
                 except (TypeError, ValueError):
                     vals.append(0.0)
 
-            vmin, vmax = min(vals), max(vals)
+            # 有効値（>0）のみで正規化範囲を決定
+            valid_vals = [v for v in vals if v > 0]
+            if len(valid_vals) < 2:
+                continue  # 有効データが2件未満の次元はスキップ
+            vmin, vmax = min(valid_vals), max(valid_vals)
             rng = (vmax - vmin) or 1.0
-            normed = [(v - vmin) / rng * 100 for v in vals]
+            FLOOR = 25  # 最低値を25に底上げ（視覚的な誇張を緩和）
+            normed = [((v - vmin) / rng * (100 - FLOOR) + FLOOR if v > 0 else -1.0) for v in vals]
             if invert:
-                normed = [100 - x for x in normed]
+                normed = [(100 - x if x >= 0 else -1.0) for x in normed]
 
-            # ゼロ値（欠損）艇は 50 に補正
-            valid_mask = [v > 0 for v in vals]
-            if any(valid_mask):
-                for i in range(len(normed)):
-                    if not valid_mask[i]:
-                        normed[i] = 50.0
+            # 欠損艇は 50 に補正
+            for i in range(len(normed)):
+                if normed[i] < 0:
+                    normed[i] = 50.0
 
             radar_dims.append(label)
             for i, f in enumerate(frames):
@@ -974,12 +1140,16 @@ if st.session_state.result is not None:
         fig.update_layout(
             polar=dict(
                 radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
-                angularaxis=dict(tickfont=dict(size=11)),
-                bgcolor="#0e1726",
+                angularaxis=dict(
+                    tickfont=dict(size=11, color="#334"),
+                    rotation=90,
+                    direction="clockwise",
+                ),
+                bgcolor="#f0f2f6",
             ),
             showlegend=True,
-            legend=dict(font=dict(color="#ccc"), bgcolor="rgba(0,0,0,0)"),
-            paper_bgcolor="#0e1726",
+            legend=dict(font=dict(color="#334"), bgcolor="rgba(255,255,255,0.7)"),
+            paper_bgcolor="#f0f2f6",
             margin=dict(l=20, r=20, t=20, b=20),
             height=340,
         )
@@ -987,7 +1157,7 @@ if st.session_state.result is not None:
 
     radar_fig = _make_radar_chart(scored)
     if radar_fig.data:
-        st.plotly_chart(radar_fig, use_container_width=True)
+        st.plotly_chart(radar_fig, use_container_width=True, config={"staticPlot": True})
     else:
         st.caption("レーダーチャートを表示するのに十分なデータがありません")
 
@@ -1197,14 +1367,21 @@ if st.session_state.result is not None:
                 ("体重（荒天）ボーナス", f'{_W["weight_rough"]}'),
                 ("無風判定閾値", f'{_G["calm_wind_threshold"]}m'),
                 ("ナイター開始R", f'{_G["night_race_start"]}R以降'),
+                ("安定板インコース加点", f'{_W.get("stabilizer_in_boost", 3.0)}'),
+                ("安定板スコア均等化率", f'{_W.get("stabilizer_equalize", 0.15)}'),
+                ("安定板展示タイム割引率", f'{_W.get("stabilizer_et_discount", 0.6)}'),
             ]),
             ("モデル・予想生成", [
                 ("直近成績モメンタムの重み", f'{_W["momentum"]}'),
                 ("優勝戦イン強化", f'{_W["grade_final_boost"]}'),
                 ("高橋アナ予想ブースト", f'{_W["taka_boost"]}'),
                 ("選手別決まり手適合度の重み", f'{_W.get("racer_kimarite_weight", 3.0)}'),
+                ("決まり手連動2着補正", f'{_W.get("kimarite_placement_weight", 0.5)}'),
+                ("ソフトマックス温度", f'{_W.get("individual_temp", 15.0)}'),
                 ("Henery gamma", f'{_W["henery_gamma"]}'),
                 ("期待値閾値（穴選定）", f'{_W["ev_threshold"]}'),
+                ("穴候補の確率下限", f'{_W.get("ana_min_prob", 0.5)}%'),
+                ("穴候補の公正オッズ上限", f'{_W.get("ana_max_fair_odds", 80)}'),
             ]),
         ]
 
