@@ -486,13 +486,13 @@ if st.session_state.result is not None:
     _date_fmt = f"{_dstr[:4]}/{_dstr[4:6]}/{_dstr[6:]}" if len(_dstr) == 8 else _dstr
     _dl_time = st.session_state.deadline or "-"
 
-    # カウントダウン用: 締切のISO文字列を生成
+    # カウントダウン用: 締切のISO文字列を生成（レース日付を使用）
     _dl_iso = ""
-    if _dl_time != "-":
+    if _dl_time != "-" and len(_dstr) == 8:
         try:
-            _now = datetime.now()
+            _race_date = f"{_dstr[:4]}-{_dstr[4:6]}-{_dstr[6:]}"
             _dl_iso = datetime.strptime(
-                f"{_now.strftime('%Y-%m-%d')} {_dl_time}", "%Y-%m-%d %H:%M"
+                f"{_race_date} {_dl_time}", "%Y-%m-%d %H:%M"
             ).isoformat()
         except Exception:
             pass
