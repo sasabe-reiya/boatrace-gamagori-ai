@@ -260,7 +260,9 @@ def calculate_scores(
                 scores[i] -= W.get("st_fly_penalty", 5.0)
             else:
                 st_diff = mean_st - st_numeric[i]
-                scores[i] += st_diff * W.get("st_weight", 25.0)
+                st_score = st_diff * W.get("st_weight", 25.0)
+                st_score = max(-3.0, min(3.0, st_score))  # v11: 極端なST差の影響をクランプ
+                scores[i] += st_score
 
     # ── Step 3c: モーター2連率・ボート2連率補正 ──────────────────
     if "モーター2連率" in df.columns:
@@ -321,63 +323,61 @@ def calculate_scores(
     # ── Step 3f: 蒲郡独自展示タイム（一周・まわり足・直線） ────────
     # まわり足タイム: ターン力の指標（最重要）
     mawari_times = _safe_col(df, "まわり足タイム")
-    if mawari_times is not None:
+    _mw_weight = W.get("mawari_time", 1.2)
+    if mawari_times is not None and _mw_weight > 0:
         valid_mw = mawari_times[mawari_times > 0]
         if len(valid_mw) >= 2:
             mean_mw = valid_mw.mean()
             std_mw  = valid_mw.std() + 1e-9
-            best_mw = valid_mw.min()
             for i in range(n):
                 if mawari_times[i] <= 0:
                     continue
                 mw_z = -(mawari_times[i] - mean_mw) / std_mw
-                scores[i] += mw_z * W.get("mawari_time", 2.0)
-                if mawari_times[i] == best_mw:
-                    scores[i] += 1.0
+                scores[i] += mw_z * _mw_weight
 
     # 直線タイム: 伸び足の指標
     chokusen_times = _safe_col(df, "直線タイム")
-    if chokusen_times is not None:
+    _ch_weight = W.get("chokusen_time", 1.5)
+    if chokusen_times is not None and _ch_weight > 0:
         valid_ch = chokusen_times[chokusen_times > 0]
         if len(valid_ch) >= 2:
             mean_ch = valid_ch.mean()
             std_ch  = valid_ch.std() + 1e-9
-            best_ch = valid_ch.min()
             for i in range(n):
                 if chokusen_times[i] <= 0:
                     continue
                 ch_z = -(chokusen_times[i] - mean_ch) / std_ch
-                scores[i] += ch_z * W.get("chokusen_time", 1.5)
-                if chokusen_times[i] == best_ch:
-                    scores[i] += 0.5
+                scores[i] += ch_z * _ch_weight
 
-    # 一周タイム: 総合力の指標（データがある場合のみ）
+    # 一周タイム: 総合力の指標（v11: まわり足+直線と三重計上のため、重み0で無効化推奨）
     lap_times = _safe_col(df, "一周タイム")
-    if lap_times is not None:
+    _lt_weight = W.get("lap_time", 0.0)
+    if lap_times is not None and _lt_weight > 0:
         valid_lt = lap_times[lap_times > 0]
         if len(valid_lt) >= 2:
             mean_lt = valid_lt.mean()
             std_lt  = valid_lt.std() + 1e-9
-            best_lt = valid_lt.min()
             for i in range(n):
                 if lap_times[i] <= 0:
                     continue
                 lt_z = -(lap_times[i] - mean_lt) / std_lt
-                scores[i] += lt_z * W.get("lap_time", 1.5)
-                if lap_times[i] == best_lt:
-                    scores[i] += 1.0
+                scores[i] += lt_z * _lt_weight
 
     # ターン巧者判定: 直線は遅いがまわり足が速い → 差し/まくり差し向き
+    # v11: 段階化（順位差に応じてボーナスを按分）
     if (mawari_times is not None and chokusen_times is not None
             and sum(mawari_times > 0) >= 2 and sum(chokusen_times > 0) >= 2):
+        _tm_weight = W.get("turn_master_bonus", 2.0)
         for i in range(n):
             if mawari_times[i] <= 0 or chokusen_times[i] <= 0:
                 continue
             mw_rank = sum(1 for j in range(n) if mawari_times[j] > 0 and mawari_times[j] < mawari_times[i])
             ch_rank = sum(1 for j in range(n) if chokusen_times[j] > 0 and chokusen_times[j] < chokusen_times[i])
-            if mw_rank < ch_rank - 1 and course_positions[i] >= 1:
-                # ターン巧者: まわり足順位 >> 直線順位 → 差し/まくり差し有利
-                scores[i] += W.get("turn_master_bonus", 1.5)
+            rank_gap = ch_rank - mw_rank
+            if rank_gap >= 2 and course_positions[i] >= 1:
+                # v11: 順位差2=50%, 3=75%, 4+=100%のボーナスに段階化
+                ratio = min(1.0, (rank_gap - 1) / 3.0)
+                scores[i] += _tm_weight * ratio
 
     # ── Step 4: 風向×コース特性の複合補正 ────────────────────────
     wind_dir = weather.get("風向", "-")
@@ -412,17 +412,23 @@ def calculate_scores(
             scores[best_et_idx] += 1.0
 
     # ── Step 7: ナイター補正 ──────────────────────────────────────
+    # v8で night_boost=0 に設定済み（ベイズpriorがイン有利を反映）
+    # v11: 2コースへのハードコードペナルティ(-0.5)も削除
     is_night = race_no >= G["night_race_start"]
-    if is_night:
+    if is_night and W["night_boost"] > 0:
         scores[0] += W["night_boost"]
-        scores[1] -= 0.5
 
-    # ── Step 8: 級別ボーナス ─────────────────────────────────────
-    RANK_BONUS = {"A1": 3.5, "A2": 1.5, "B1": 0.0, "B2": -2.0}
+    # ── Step 8: 級別ボーナス（v11: SCORE_WEIGHTSから取得） ────────
+    RANK_BONUS = {
+        "A1": W.get("rank_a1", 3.0),
+        "A2": W.get("rank_a2", 1.2),
+        "B1": W.get("rank_b1", 0.0),
+        "B2": W.get("rank_b2", -1.5),
+    }
     for i, rank in enumerate(df["級別"].values):
         bonus = RANK_BONUS.get(str(rank).strip(), 0.0)
         if str(rank).strip() == "A1" and course_positions[i] >= 3:
-            bonus += 1.0
+            bonus += 0.5  # v11: 1.0→0.5 外枠A1追加ボーナス縮小
         scores[i] += bonus
 
     # ── Step 8b: コース別1着率 【v3新規】 ─────────────────────────
