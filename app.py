@@ -554,7 +554,6 @@ if st.session_state.result is not None:
                 if not rk:
                     continue
                 name = row.get("選手名", "")
-                num = rk.get("レース数", 0)
                 # 枠番色
                 _FRAME_BG = {"1": "#fff", "2": "#000", "3": "#e74c3c",
                              "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
@@ -582,6 +581,27 @@ if st.session_state.result is not None:
                         f'margin-left:6px">{pct:.1f}%</span>'
                         f'</div>'
                     )
+                # 1号艇: 負け視点の決まり手（差され・捲られ・捲られ差）
+                _MAKE_COLORS = {
+                    "差され": "#e67e22", "捲られ": "#d35400", "捲られ差": "#e74c3c",
+                }
+                if frame == "1":
+                    for kt_name in ["差され", "捲られ", "捲られ差"]:
+                        pct = rk.get(kt_name, 0.0)
+                        if pct <= 0:
+                            continue
+                        color = _MAKE_COLORS.get(kt_name, "#e67e22")
+                        bars_html += (
+                            f'<div style="display:flex;align-items:center;margin:1px 0">'
+                            f'<span style="color:#e8a87a;font-size:0.7rem;width:55px;text-align:right;'
+                            f'margin-right:6px">{kt_name}</span>'
+                            f'<div style="flex:1;background:#2a1a0a;border-radius:3px;height:14px;overflow:hidden">'
+                            f'<div style="width:{min(pct, 100):.1f}%;height:100%;background:{color};'
+                            f'border-radius:3px"></div></div>'
+                            f'<span style="color:#e8a87a;font-size:0.72rem;width:42px;text-align:right;'
+                            f'margin-left:6px">{pct:.1f}%</span>'
+                            f'</div>'
+                        )
 
                 st.markdown(
                     f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:6px;'
@@ -592,8 +612,6 @@ if st.session_state.result is not None:
                     f'width:22px;height:22px;font-weight:bold;font-size:0.8rem;margin-right:6px">'
                     f'{frame}</span>'
                     f'<span style="color:#fff;font-weight:bold;font-size:0.85rem">{name}</span>'
-                    f'<span style="color:#7ab8e8;font-size:0.7rem;margin-left:auto">'
-                    f'{num}走</span>'
                     f'</div>'
                     f'{bars_html}'
                     f'</div>',

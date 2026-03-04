@@ -424,7 +424,7 @@ def calculate_scores(
         for i in range(n):
             frame = frames_str[i]
             rk = racer_kimarite.get(frame)
-            if not rk or rk.get("レース数", 0) < 5:
+            if not rk:
                 continue
 
             ci = course_positions[i] + 1  # 1-indexed

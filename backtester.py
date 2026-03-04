@@ -300,74 +300,54 @@ def optimize_from_backtest(
     # ── ベースライン詳細（的中レース一覧） ──
     baseline_details = _evaluate_details(x0, races)
 
-    # ── 最適化実行 ──
-    try:
-        from scipy.optimize import minimize
+    # ── 最適化実行（ランダム探索 + サンプリング高速化） ──
+    # 全レースを毎回評価すると遅いため、サンプル評価 → ベスト候補を全件で検証
+    SAMPLE_SIZE = min(60, len(races))
 
-        iteration_count = [0]
-        best_so_far = [baseline_score]
+    best_x = x0.copy()
+    best_score = baseline_score
+    rng = np.random.default_rng(42)
+    no_improve_count = 0
 
-        def objective(x):
-            score = -evaluate_weights_backtest(x, races, WEIGHT_KEYS)
-            iteration_count[0] += 1
-            if -score > best_so_far[0]:
-                best_so_far[0] = -score
-                if progress_callback:
-                    progress_callback(
-                        iteration_count[0], max_iter,
-                        f"改善: {-score:.4f} (iter {iteration_count[0]})",
-                    )
-                else:
-                    print(f"  [iter {iteration_count[0]}] 改善: {-score:.4f}")
-            elif iteration_count[0] % 50 == 0:
-                if progress_callback:
-                    progress_callback(
-                        iteration_count[0], max_iter,
-                        f"探索中 (iter {iteration_count[0]}, best={best_so_far[0]:.4f})",
-                    )
-                else:
-                    print(f"  [iter {iteration_count[0]}] best={best_so_far[0]:.4f}")
-            return score
+    for iteration in range(max_iter):
+        # サンプルでの高速評価
+        sample = list(rng.choice(races, size=SAMPLE_SIZE, replace=False))
 
-        res = minimize(
-            objective,
-            x0,
-            method="Nelder-Mead",
-            options={
-                "maxiter": max_iter,
-                "xatol": 0.01,
-                "fatol": 0.001,
-                "adaptive": True,
-            },
-        )
-        best_x = np.clip(res.x, 0.0, 50.0)
-        best_score = -res.fun
+        # 現在のベストを基準に摂動（探索幅は徐々に縮小）
+        scale = max(0.05, 0.4 * (1.0 - iteration / max_iter))
+        noise = rng.uniform(-scale, scale, size=len(x0))
+        candidate = np.clip(best_x * (1.0 + noise), 0.0, 50.0)
 
-    except ImportError:
-        if progress_callback:
-            progress_callback(0, max_iter, "scipy未インストール → ランダム探索")
-        else:
-            print("[ml] scipy未インストール → ランダム探索にフォールバック")
-
-        best_x = x0.copy()
-        best_score = baseline_score
-        rng = np.random.default_rng(42)
-
-        for iteration in range(max_iter):
-            # 各重みを±30%の範囲でランダムに摂動
-            noise = rng.uniform(-0.3, 0.3, size=len(x0))
-            candidate = np.clip(x0 * (1.0 + noise), 0.0, 50.0)
-            score = evaluate_weights_backtest(candidate, races, WEIGHT_KEYS)
-            if score > best_score:
-                best_score = score
+        score = evaluate_weights_backtest(candidate, sample, WEIGHT_KEYS)
+        if score > best_score:
+            # サンプルで改善 → 全件で検証
+            full_score = evaluate_weights_backtest(candidate, races, WEIGHT_KEYS)
+            if full_score > best_score:
+                best_score = full_score
                 best_x = candidate.copy()
+                no_improve_count = 0
                 if progress_callback:
-                    progress_callback(iteration, max_iter, f"改善: {score:.4f}")
+                    progress_callback(iteration, max_iter, f"改善: {full_score:.4f} (iter {iteration})")
                 else:
-                    print(f"  [iter {iteration}] 改善: {score:.4f}")
-            elif iteration % 50 == 0:
-                if progress_callback:
-                    progress_callback(iteration, max_iter, f"探索中 (best={best_score:.4f})")
+                    print(f"  [iter {iteration}] 改善: {full_score:.4f}")
+            else:
+                no_improve_count += 1
+        else:
+            no_improve_count += 1
+
+        if iteration % 50 == 0:
+            if progress_callback:
+                progress_callback(iteration, max_iter, f"探索中 (iter {iteration}, best={best_score:.4f})")
+            else:
+                print(f"  [iter {iteration}] best={best_score:.4f}")
+
+        # 100回連続改善なしで早期終了
+        if no_improve_count >= 100:
+            if progress_callback:
+                progress_callback(iteration, max_iter, f"収束 (iter {iteration})")
+            else:
+                print(f"  [iter {iteration}] 収束（100回改善なし）")
+            break
 
     improvement = best_score - baseline_score
     msg = f"最適化完了: {best_score:.4f} (改善 {improvement:+.4f})"

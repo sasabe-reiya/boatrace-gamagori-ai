@@ -1468,6 +1468,9 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
 
     if course == 1:
         nige = g1_6m[0] if len(g1_6m) > 0 else 0.0
+        sasare = g2_6m[0] if len(g2_6m) > 0 else 0.0
+        makurare = g3_6m[0] if len(g3_6m) > 0 else 0.0
+        makurare_sashi = g4_6m[0] if len(g4_6m) > 0 else 0.0
         return {
             "逃げ": nige,
             "差し": 0.0,
@@ -1475,7 +1478,9 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
             "まくり差し": 0.0,
             "抜き": 0.0,
             "恵まれ": 0.0,
-            "レース数": 0,
+            "差され": sasare,
+            "捲られ": makurare,
+            "捲られ差": makurare_sashi,
         }
     else:
         idx = course - 1  # 0-indexed: コース2→idx=1, コース3→idx=2, ...
@@ -1489,7 +1494,6 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
             "まくり差し": makuri_sashi,
             "抜き": 0.0,
             "恵まれ": 0.0,
-            "レース数": 0,
         }
 
 
