@@ -460,13 +460,9 @@ if fetch_btn:
             odds, odds_2t, taka, racer_km, race_result_data, lady_racers,
         )
 
-        # 設定パネルを即座にたたむ（プレースホルダー差し替え、st.rerun()不要）
+        # 設定パネルをたたんで再描画
         st.session_state.show_settings = False
-        _settings_ph.empty()
-        with _settings_ph.container():
-            st.button("▸ レース設定を開く", key="settings_open_post",
-                      use_container_width=True,
-                      on_click=lambda: st.session_state.update(show_settings=True))
+        st.rerun()
 
     else:
         progress_bar.progress(100, text="❌ データ取得失敗")
@@ -1159,15 +1155,15 @@ if st.session_state.result is not None:
                 if _is_hit:
                     hit_html = (
                         '<span style="'
-                        'position:absolute;left:calc(100% + 4px);top:50%;transform:translateY(-50%);'
                         'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
-                        'color:#fff;font-weight:bold;font-size:0.65rem;padding:1px 5px;'
-                        'line-height:1;border-radius:8px;white-space:nowrap">的中</span>'
+                        'color:#fff;font-weight:bold;font-size:0.6rem;padding:1px 4px;'
+                        'line-height:1;border-radius:6px;white-space:nowrap;'
+                        'margin-left:3px;flex-shrink:0">的中</span>'
                     )
                 combo_html = (
                     f'<div style="display:inline-flex;align-items:center;'
                     f'justify-content:center;gap:2px;'
-                    f'height:22px;position:relative">'
+                    f'height:22px;flex-wrap:nowrap">'
                     f'{nums_html}{hit_html}</div>'
                 )
 
@@ -1204,7 +1200,7 @@ if st.session_state.result is not None:
                     f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:36px">'
                     f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
                     f'font-size:0.78rem">{_row_num}</td>'
-                    f'<td style="{_td_base};text-align:center">{combo_html}</td>'
+                    f'<td style="{_td_base};text-align:left">{combo_html}</td>'
                     f'<td style="{_td_base};text-align:right;color:#fff;'
                     f'font-size:0.85rem">{prob_str}</td>'
                     f'<td style="{_td_base};text-align:right;color:#ffe066;'
