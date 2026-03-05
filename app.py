@@ -17,6 +17,8 @@ import plotly.graph_objects as go
 from datetime import date, datetime, timezone, timedelta
 import time
 import re
+import uuid as _uuid_mod
+from streamlit.components.v1 import html as _st_html
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 APP_VERSION = "v3.1-20260304"
@@ -36,10 +38,12 @@ from result_tracker import save_prediction
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "_cache")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
-def _cache_path(race_no, d_str):
+def _cache_path(race_no, d_str, device_id=""):
+    if device_id:
+        return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}_{device_id}.json")
     return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}.json")
 
-def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data, lady_racers=None):
+def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data, lady_racers=None, device_id=""):
     """予想結果をファイルにキャッシュ（セッション切断対策）"""
     try:
         # scored_dfをJSON化可能に変換
@@ -62,15 +66,15 @@ def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t,
             "date_str": d_str,
             "lady_racers": list(lady_racers) if lady_racers else [],
         }
-        with open(_cache_path(race_no, d_str), "w", encoding="utf-8") as f:
+        with open(_cache_path(race_no, d_str, device_id), "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False, default=str)
     except Exception:
         pass
 
-def _load_result_cache(race_no, d_str):
+def _load_result_cache(race_no, d_str, device_id=""):
     """キャッシュから予想結果を復元"""
     try:
-        path = _cache_path(race_no, d_str)
+        path = _cache_path(race_no, d_str, device_id)
         if not os.path.exists(path):
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -98,6 +102,26 @@ def _load_result_cache(race_no, d_str):
         return None
 
 st.set_page_config(page_title="競艇予想AI レイヤドン", page_icon="🔱", layout="centered", initial_sidebar_state="collapsed")
+
+# ── デバイスID（localStorage で端末識別）────────────────────────────
+# query_params に did が無い場合、JSで localStorage から取得/生成して
+# query_params に付与 → rerun で Python 側に渡る
+_device_id = st.query_params.get("did", "")
+if not _device_id:
+    _new_did = _uuid_mod.uuid4().hex[:12]
+    _st_html(f"""<script>
+    (function(){{
+        var k='_layerdon_did';
+        var did=localStorage.getItem(k);
+        if(!did){{ did='{_new_did}'; localStorage.setItem(k,did); }}
+        var u=new URL(window.location);
+        if(u.searchParams.get('did')!==did){{
+            u.searchParams.set('did',did);
+            window.location.replace(u.toString());
+        }}
+    }})();
+    </script>""", height=0)
+    st.stop()
 
 # ── パスワード認証 ──────────────────────────────────────────────────
 APP_PASSWORD = "sasabe"
@@ -273,7 +297,7 @@ for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odd
 if st.session_state.result is None:
     _restore_race = st.query_params.get("race", "1")
     _restore_date = date.today().strftime("%Y%m%d")
-    _cached = _load_result_cache(_restore_race, _restore_date)
+    _cached = _load_result_cache(_restore_race, _restore_date, _device_id)
     if _cached:
         st.session_state.result      = _cached["result"]
         st.session_state.weather     = _cached["weather"]
@@ -458,6 +482,7 @@ if fetch_btn:
         _save_result_cache(
             race_no, d_str, result, weather, deadline,
             odds, odds_2t, taka, racer_km, race_result_data, lady_racers,
+            device_id=_device_id,
         )
 
         # 設定パネルをたたんで再描画
@@ -830,7 +855,18 @@ if st.session_state.result is not None:
     if "F" in display_df.columns:
         fmt["F"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "0"
     if "展示進入" in display_df.columns:
-        fmt["展示進入"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "-"
+        # 枠番と異なる進入コースを「枠→コース」形式で表示
+        _waku_list = scored["枠番"].astype(int).tolist()
+        def _fmt_shinnyuu(idx, x):
+            if pd.isnull(x) or int(x) <= 0:
+                return "-"
+            c = int(x)
+            w = _waku_list[idx]
+            return f"{w}→{c}" if c != w else f"{c}"
+        display_df["展示進入"] = [
+            _fmt_shinnyuu(i, v) for i, v in enumerate(display_df["展示進入"])
+        ]
+        fmt["展示進入"] = "{}"
 
     # 展示情報の列名リスト
     _EXHIBIT_COLS = ["展示進入", "展示タイム", "まわり足", "直線T", "一周T"]
@@ -871,6 +907,19 @@ if st.session_state.result is not None:
 
     if "M2連(%)" in display_df.columns:
         styler = styler.apply(_style_motor2, subset=["M2連(%)"])
+
+    # 展示進入が枠番と異なるセルをオレンジでハイライト
+    if "展示進入" in display_df.columns:
+        _shinnyuu_diff = [
+            "→" in str(v) for v in display_df["展示進入"]
+        ]
+        def _style_shinnyuu(col):
+            return [
+                "background-color: rgba(255,111,0,0.55); color: #fff; font-weight: bold; text-shadow: 0 0 4px rgba(255,160,0,0.7)"
+                if _shinnyuu_diff[i] else ""
+                for i in range(len(col))
+            ]
+        styler = styler.apply(_style_shinnyuu, subset=["展示進入"])
 
     # 展示情報列に1位/2位ハイライト適用（展示進入はランキング対象外）
     _EXHIBIT_RANK_COLS = [c for c in _EXHIBIT_COLS if c != "展示進入"]

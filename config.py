@@ -10,7 +10,7 @@ BEFORE_INFO_URL = f"{BASE_URL}/owpc/pc/race/beforeinfo"
 # 蒲郡専用ロジック定数
 GAMAGORI_SETTINGS = {
     "night_race_start":       9,
-    "calm_wind_threshold":    3.0,
+    "calm_wind_threshold":    2.5,
     "base_kado_rate":         18.5,
     "base_makuri_sashi_rate": 14.2,
     "night_nige_boost":       1.08,
