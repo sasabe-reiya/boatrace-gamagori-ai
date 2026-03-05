@@ -1089,19 +1089,12 @@ if app_mode == "予想":
         for col in ["コース別1着率", "直近平均着順"]:
             if col in scored.columns:
                 extra_cols.append(col)
-        # 展示情報をグループ化（展示進入・展示タイム・まわり足・直線T・一周T）
-        # 展示タイムが全て未発表のときは進入コースも表示しない
+        # 展示情報は別テーブルに分離
         _has_exhibit = (
             "展示タイム" in scored.columns
             and scored["展示タイム"].apply(lambda x: pd.notnull(x) and x > 0).any()
         )
-        if "進入コース" in scored.columns and _has_exhibit:
-            base_cols.append("進入コース")
-        base_cols += ["展示タイム"]
-        for col in ["まわり足タイム", "直線タイム", "一周タイム"]:
-            if col in scored.columns:
-                base_cols.append(col)
-        base_cols += ["チルト", "win_prob", "highlight_reason"]
+        base_cols += ["win_prob", "highlight_reason"]
 
         display_cols = base_cols[:3] + extra_cols + base_cols[3:]
         seen = set()
@@ -1136,60 +1129,14 @@ if app_mode == "予想":
             fmt["M2連(%)"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
         if "平均ST" in display_df.columns:
             fmt["平均ST"] = lambda x: f"{x:.2f}" if pd.notnull(x) else "-"
-        fmt["展示タイム"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "未発表"
-        fmt["チルト"]    = lambda x: f"{x:.1f}" if pd.notnull(x) else "-"
         if "C別1着(%)" in display_df.columns:
             fmt["C別1着(%)"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
         if "直近平均着" in display_df.columns:
             fmt["直近平均着"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
-        if "まわり足" in display_df.columns:
-            fmt["まわり足"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
-        if "直線T" in display_df.columns:
-            fmt["直線T"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
-        if "一周T" in display_df.columns:
-            fmt["一周T"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
         if "体重" in display_df.columns:
             fmt["体重"] = lambda x: f"{x:.1f}kg" if pd.notnull(x) and x > 0 else "-"
         if "F" in display_df.columns:
             fmt["F"] = lambda x: f"{int(x)}" if pd.notnull(x) and x > 0 else "0"
-        if "展示進入" in display_df.columns:
-            # 枠番と異なる進入コースを「枠→コース」形式で表示
-            _waku_list = scored["枠番"].astype(int).tolist()
-            def _fmt_shinnyuu(idx, x):
-                if pd.isnull(x) or int(x) <= 0:
-                    return "-"
-                c = int(x)
-                w = _waku_list[idx]
-                return f"{w}→{c}" if c != w else f"{c}"
-            display_df["展示進入"] = [
-                _fmt_shinnyuu(i, v) for i, v in enumerate(display_df["展示進入"])
-            ]
-            fmt["展示進入"] = "{}"
-
-        # 展示情報の列名リスト
-        _EXHIBIT_COLS = ["展示進入", "展示タイム", "まわり足", "直線T", "一周T"]
-
-        def _style_exhibit_rank(col):
-            """展示列の1位(赤)・2位(黄)を色付け"""
-            styles = [""] * len(col)
-            valid = col[(col > 0) & col.notnull()]
-            if len(valid) >= 2:
-                sorted_vals = valid.sort_values()
-                top1, top2 = sorted_vals.iloc[0], sorted_vals.iloc[1]
-                for i, v in enumerate(col):
-                    if pd.notnull(v) and v > 0:
-                        if v == top1:
-                            styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
-                        elif v == top2:
-                            styles[i] = "background-color: rgba(241,196,15,0.35); color: #fff; font-weight: bold"
-            elif len(valid) == 1:
-                top1 = valid.iloc[0]
-                for i, v in enumerate(col):
-                    if pd.notnull(v) and v > 0 and v == top1:
-                        styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
-            return styles
-
-        styler = display_df.style
 
         # M2連(%) の良/悪ハイライト
         def _style_motor2(col):
@@ -1203,27 +1150,10 @@ if app_mode == "予想":
                         styles[i] = "background-color: rgba(52,152,219,0.45); color: #fff; font-weight: bold"
             return styles
 
+        styler = display_df.style
+
         if "M2連(%)" in display_df.columns:
             styler = styler.apply(_style_motor2, subset=["M2連(%)"])
-
-        # 展示進入が枠番と異なるセルをオレンジでハイライト
-        if "展示進入" in display_df.columns:
-            _shinnyuu_diff = [
-                "→" in str(v) for v in display_df["展示進入"]
-            ]
-            def _style_shinnyuu(col):
-                return [
-                    "background-color: rgba(255,111,0,0.55); color: #fff; font-weight: bold; text-shadow: 0 0 4px rgba(255,160,0,0.7)"
-                    if _shinnyuu_diff[i] else ""
-                    for i in range(len(col))
-                ]
-            styler = styler.apply(_style_shinnyuu, subset=["展示進入"])
-
-        # 展示情報列に1位/2位ハイライト適用（展示進入はランキング対象外）
-        _EXHIBIT_RANK_COLS = [c for c in _EXHIBIT_COLS if c != "展示進入"]
-        for ecol in _EXHIBIT_RANK_COLS:
-            if ecol in display_df.columns:
-                styler = styler.apply(_style_exhibit_rank, subset=[ecol])
 
         # 女子選手の選手名セルをピンク色に
         if _lady_set and "登録番号" in scored.columns:
@@ -1252,21 +1182,6 @@ if app_mode == "予想":
         styled = styler.format(fmt).hide(axis="index")
         tbl_html = styled.to_html()
 
-        # 展示列ヘッダーの色を変更（テーブルUUIDを取得しCSS IDセレクタで上書き）
-        _exhibit_idxs = [display_df.columns.get_loc(c) for c in _EXHIBIT_COLS if c in display_df.columns]
-        _uuid_m = re.search(r'id="(T_[a-zA-Z0-9_]+)"', tbl_html)
-        if _uuid_m and _exhibit_idxs:
-            _tid = _uuid_m.group(1)
-            _sel = ", ".join(f"#{_tid}_level0_col{i}" for i in _exhibit_idxs)
-            _ecss = (
-                f"<style>{_sel} {{"
-                f" background-color:#0a6e5c !important;"
-                f" color:#5dffe0 !important;"
-                f" font-weight:bold !important;"
-                f"}}</style>"
-            )
-            tbl_html = _ecss + tbl_html
-
         # ポイント列を左寄せにする
         if "ポイント" in display_df.columns:
             _point_idx = display_df.columns.get_loc("ポイント")
@@ -1285,6 +1200,134 @@ if app_mode == "予想":
             f'<div style="overflow-x:auto;">{tbl_html}</div>',
             unsafe_allow_html=True,
         )
+
+        # ── 展示データテーブル ──────────────────────────────────────
+        if _has_exhibit:
+            st.markdown(f"#### 🚤 {rno}R 展示データ")
+
+            # 展示テーブル用カラム構築
+            ex_cols = ["枠番", "選手名"]
+            ex_col_rename = {}
+            if "進入コース" in scored.columns:
+                ex_cols.append("進入コース")
+                ex_col_rename["進入コース"] = "展示進入"
+            ex_cols.append("展示タイム")
+            for col in ["まわり足タイム", "直線タイム", "一周タイム"]:
+                if col in scored.columns:
+                    ex_cols.append(col)
+            ex_cols.append("チルト")
+            ex_col_rename.update({
+                "まわり足タイム": "まわり足",
+                "直線タイム":     "直線T",
+                "一周タイム":     "一周T",
+            })
+
+            ex_display_cols = [c for c in ex_cols if c in scored.columns]
+            ex_df = scored[ex_display_cols].rename(columns=ex_col_rename).copy()
+
+            # 女子選手にハートマーク
+            if _lady_set and "登録番号" in scored.columns:
+                _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
+                ex_df.loc[_lady_mask, "選手名"] = "♥ " + ex_df.loc[_lady_mask, "選手名"].astype(str)
+
+            # フォーマット
+            ex_fmt = {}
+            ex_fmt["展示タイム"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "未発表"
+            ex_fmt["チルト"] = lambda x: f"{x:.1f}" if pd.notnull(x) else "-"
+            if "まわり足" in ex_df.columns:
+                ex_fmt["まわり足"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
+            if "直線T" in ex_df.columns:
+                ex_fmt["直線T"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
+            if "一周T" in ex_df.columns:
+                ex_fmt["一周T"] = lambda x: f"{x:.2f}" if pd.notnull(x) and x > 0 else "-"
+
+            # 進入コースのフォーマット
+            if "展示進入" in ex_df.columns:
+                _waku_list = scored["枠番"].astype(int).tolist()
+                def _fmt_shinnyuu(idx, x):
+                    if pd.isnull(x) or int(x) <= 0:
+                        return "-"
+                    c = int(x)
+                    w = _waku_list[idx]
+                    return f"{w}→{c}" if c != w else f"{c}"
+                ex_df["展示進入"] = [
+                    _fmt_shinnyuu(i, v) for i, v in enumerate(ex_df["展示進入"])
+                ]
+                ex_fmt["展示進入"] = "{}"
+
+            # 展示列の1位/2位ハイライト
+            _EXHIBIT_COLS = ["展示進入", "展示タイム", "まわり足", "直線T", "一周T"]
+
+            def _style_exhibit_rank(col):
+                """展示列の1位(赤)・2位(黄)を色付け"""
+                styles = [""] * len(col)
+                valid = col[(col > 0) & col.notnull()]
+                if len(valid) >= 2:
+                    sorted_vals = valid.sort_values()
+                    top1, top2 = sorted_vals.iloc[0], sorted_vals.iloc[1]
+                    for i, v in enumerate(col):
+                        if pd.notnull(v) and v > 0:
+                            if v == top1:
+                                styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
+                            elif v == top2:
+                                styles[i] = "background-color: rgba(241,196,15,0.35); color: #fff; font-weight: bold"
+                elif len(valid) == 1:
+                    top1 = valid.iloc[0]
+                    for i, v in enumerate(col):
+                        if pd.notnull(v) and v > 0 and v == top1:
+                            styles[i] = "background-color: rgba(231,76,60,0.35); color: #fff; font-weight: bold"
+                return styles
+
+            ex_styler = ex_df.style
+
+            # 展示進入が枠番と異なるセルをオレンジでハイライト
+            if "展示進入" in ex_df.columns:
+                _shinnyuu_diff = ["→" in str(v) for v in ex_df["展示進入"]]
+                def _style_shinnyuu(col):
+                    return [
+                        "background-color: rgba(255,111,0,0.55); color: #fff; font-weight: bold; text-shadow: 0 0 4px rgba(255,160,0,0.7)"
+                        if _shinnyuu_diff[i] else ""
+                        for i in range(len(col))
+                    ]
+                ex_styler = ex_styler.apply(_style_shinnyuu, subset=["展示進入"])
+
+            # 展示情報列に1位/2位ハイライト適用（展示進入はランキング対象外）
+            _EXHIBIT_RANK_COLS = [c for c in _EXHIBIT_COLS if c != "展示進入"]
+            for ecol in _EXHIBIT_RANK_COLS:
+                if ecol in ex_df.columns:
+                    ex_styler = ex_styler.apply(_style_exhibit_rank, subset=[ecol])
+
+            # 女子選手の選手名セルをピンク色に
+            if _lady_set and "登録番号" in scored.columns:
+                _lady_mask_list = scored["登録番号"].astype(str).isin(_lady_set).tolist()
+                def _style_lady_name_ex(col):
+                    return ["color: #ff69b4" if _lady_mask_list[i] else "" for i in range(len(col))]
+                ex_styler = ex_styler.apply(_style_lady_name_ex, subset=["選手名"])
+
+            # テーブルスタイル（展示用：ヘッダー色を緑系に）
+            ex_tbl_css = [
+                {"selector": "", "props": [("border-collapse", "collapse"), ("width", "100%")]},
+                {"selector": "th", "props": [
+                    ("background-color", "#0a6e5c"), ("color", "#5dffe0"),
+                    ("padding", "8px 6px"), ("text-align", "center"),
+                    ("font-size", "0.78rem"), ("border-bottom", "2px solid #0d8a72"),
+                    ("white-space", "nowrap"), ("font-weight", "bold"),
+                ]},
+                {"selector": "td", "props": [
+                    ("padding", "6px 4px"), ("text-align", "center"),
+                    ("color", "#e8f4ff"), ("border-bottom", "1px solid rgba(10,110,92,0.3)"),
+                    ("font-size", "0.8rem"), ("white-space", "nowrap"),
+                ]},
+            ]
+            ex_styler = ex_styler.set_table_styles(ex_tbl_css)
+
+            ex_styled = ex_styler.format(ex_fmt).hide(axis="index")
+            ex_tbl_html = ex_styled.to_html()
+
+            st.markdown(
+                f'<div style="overflow-x:auto;">{ex_tbl_html}</div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
