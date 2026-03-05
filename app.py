@@ -291,6 +291,22 @@ for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odd
     if key not in st.session_state:
         st.session_state[key] = None
 
+# ── レース間ナビゲーション（← 前R / 次R →）─────────────────────
+if "nav_race" not in st.session_state:
+    st.session_state.nav_race = None  # None=通常, int=自動実行するレース番号
+
+def _go_prev_race():
+    rno = st.session_state.race_no or 1
+    if rno > 1:
+        st.session_state.nav_race = rno - 1
+        st.session_state.result = None  # 結果をクリアして再実行トリガー
+
+def _go_next_race():
+    rno = st.session_state.race_no or 1
+    if rno < 12:
+        st.session_state.nav_race = rno + 1
+        st.session_state.result = None
+
 # ── セッション喪失時のキャッシュ復元 ─────────────────────────────
 # Google Appなどのインアプリブラウザでセッションが切断された場合、
 # query_paramsのrace番号と日付からキャッシュを復元する
@@ -357,11 +373,148 @@ else:
         race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R")
         if str(race_no) != st.query_params.get("race"):
             st.query_params["race"] = str(race_no)
-        race_date = st.date_input("開催日", date.today())
-        fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
+        _date_col1, _date_col2, _date_col3 = st.columns([3, 1, 1])
+        with _date_col1:
+            race_date = st.date_input("開催日", date.today())
+        with _date_col2:
+            st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+            if st.button("今日", use_container_width=True, key="btn_today"):
+                st.query_params["d"] = date.today().strftime("%Y%m%d")
+                race_date = date.today()
+        with _date_col3:
+            st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+            _tomorrow = date.today() + timedelta(days=1)
+            if st.button("明日", use_container_width=True, key="btn_tomorrow"):
+                st.query_params["d"] = _tomorrow.strftime("%Y%m%d")
+                race_date = _tomorrow
+        _btn_col1, _btn_col2 = st.columns([2, 1])
+        with _btn_col1:
+            fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
+        with _btn_col2:
+            _all_preview_btn = st.button("📋 全R一覧", use_container_width=True)
 
-# ── 予想実行 ─────────────────────────────────────────────────────
-if fetch_btn:
+# ── 全レース一括プレビュー ─────────────────────────────────────────
+if "all_preview_btn" not in dir():
+    _all_preview_btn = False
+
+if _all_preview_btn:
+    _pv_date = race_date or date.today()
+    _pv_dstr = _pv_date.strftime("%Y%m%d")
+    _pv_progress = st.progress(0, text="⏳ 全レース概要を取得中...")
+
+    _pv_results = {}
+    for _pv_rno in range(1, 13):
+        _pv_progress.progress(
+            int(_pv_rno / 12 * 100),
+            text=f"⏳ {_pv_rno}R データ取得中... ({_pv_rno}/12)",
+        )
+        # キャッシュがあればそれを使う
+        _pv_cached = _load_result_cache(str(_pv_rno), _pv_dstr, _device_id)
+        if _pv_cached:
+            _pv_results[_pv_rno] = _pv_cached
+            continue
+        # キャッシュが無ければ軽量取得＆予想実行
+        try:
+            _pv_df, _pv_w, _pv_soup = fetch_base_race_data(_pv_rno, _pv_dstr)
+            if _pv_df.empty:
+                continue
+            _pv_odds = fetch_odds_3t(_pv_rno, _pv_dstr)
+            _pv_res = predict(_pv_df, _pv_w, _pv_rno, odds_dict=_pv_odds)
+            _pv_results[_pv_rno] = {"result": _pv_res, "weather": _pv_w, "odds": _pv_odds}
+        except Exception:
+            continue
+    _pv_progress.progress(100, text="✅ 全レース取得完了")
+    time.sleep(0.3)
+    _pv_progress.empty()
+
+    # ── 一覧カードを表示 ──────────────────────────────────────────
+    _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+    _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+
+    def _jump_to_race(rno):
+        st.session_state.nav_race = rno
+        st.session_state.result = None
+
+    if not _pv_results:
+        st.warning("データを取得できるレースがありませんでした。開催時間外の可能性があります。")
+    else:
+        st.markdown(
+            f'<div style="text-align:center;color:#7ab8e8;font-size:0.85rem;'
+            f'margin-bottom:8px">📋 全レース概要 — {_pv_dstr[:4]}/{_pv_dstr[4:6]}/{_pv_dstr[6:]}</div>',
+            unsafe_allow_html=True,
+        )
+        for _pv_rno in range(1, 13):
+            if _pv_rno not in _pv_results:
+                st.markdown(
+                    f'<div style="background:#12151e;border:1px solid #2a4a80;border-radius:6px;'
+                    f'padding:8px 12px;margin:4px 0;opacity:0.5">'
+                    f'<span style="color:#7ab8e8;font-weight:bold">{_pv_rno}R</span>'
+                    f'<span style="color:#666;margin-left:8px">データなし</span></div>',
+                    unsafe_allow_html=True,
+                )
+                continue
+            _pv_data = _pv_results[_pv_rno]
+            _pv_res = _pv_data["result"]
+            _pv_cands = _pv_res.get("all_3t_candidates", [])
+            # 本命（確率1位）
+            _pv_top = _pv_cands[0] if _pv_cands else None
+            # 期待値トップ
+            _pv_ev_best = None
+            for _c in _pv_cands:
+                if _c.get("期待値") is not None and (_pv_ev_best is None or _c["期待値"] > _pv_ev_best.get("期待値", 0)):
+                    _pv_ev_best = _c
+
+            # 本命の組番バッジ
+            _top_html = ""
+            if _pv_top:
+                for _ch in _pv_top["買い目"].split("-"):
+                    _bg = _FBG.get(_ch, "#555")
+                    _fg = _FFG.get(_ch, "#fff")
+                    _top_html += (
+                        f'<span style="display:inline-block;width:20px;height:20px;'
+                        f'line-height:20px;text-align:center;border-radius:3px;'
+                        f'background:{_bg};color:{_fg};font-weight:bold;'
+                        f'font-size:0.78rem;margin:0 1px">{_ch}</span>'
+                    )
+                _top_html += f'<span style="color:#7ab8e8;font-size:0.75rem;margin-left:6px">{_pv_top["的中確率"]:.1f}%</span>'
+
+            # 期待値ベスト
+            _ev_html = ""
+            if _pv_ev_best and _pv_ev_best.get("期待値", 0) >= 1.0:
+                _ev_val = _pv_ev_best["期待値"]
+                _ev_combo = _pv_ev_best["買い目"]
+                _ev_html = (
+                    f'<span style="color:#2ecc71;font-size:0.75rem;margin-left:12px">'
+                    f'EV {_ev_val:.2f} ({_ev_combo})</span>'
+                )
+
+            st.markdown(
+                f'<div style="background:#1a2744;border:1px solid #2a4a80;border-radius:6px;'
+                f'padding:8px 12px;margin:4px 0;display:flex;align-items:center;flex-wrap:wrap;gap:6px">'
+                f'<span style="color:#f0a500;font-weight:900;font-size:1.1rem;min-width:36px">{_pv_rno}R</span>'
+                f'<span style="display:inline-flex;align-items:center;gap:1px">{_top_html}</span>'
+                f'{_ev_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.button(
+                f"{_pv_rno}R 詳細を見る",
+                key=f"pv_jump_{_pv_rno}",
+                use_container_width=True,
+                on_click=_jump_to_race,
+                args=(_pv_rno,),
+            )
+
+# ── 予想実行（ナビゲーション経由の自動実行を含む）───────────────
+_nav_auto = False
+if st.session_state.nav_race is not None:
+    race_no = st.session_state.nav_race
+    race_date = date.today()
+    st.session_state.nav_race = None
+    st.query_params["race"] = str(race_no)
+    _nav_auto = True
+
+if fetch_btn or _nav_auto:
     d_str = race_date.strftime("%Y%m%d")
     progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
@@ -555,18 +708,60 @@ if st.session_state.result is not None:
         f'</div>',
         unsafe_allow_html=True,
     )
-    # カウントダウン（静的テキスト表示 - iOS互換性のためiframeを廃止）
+
+    # ── レース間ナビゲーションボタン ──────────────────────────────
+    _nav_col1, _nav_col2, _nav_col3 = st.columns([1, 2, 1])
+    with _nav_col1:
+        st.button(
+            f"◀ {_rno_disp - 1}R" if _rno_disp > 1 else "◀",
+            use_container_width=True,
+            disabled=(_rno_disp <= 1),
+            on_click=_go_prev_race,
+        )
+    with _nav_col2:
+        st.markdown(
+            f'<div style="text-align:center;color:#7ab8e8;font-size:0.8rem;'
+            f'line-height:2.4">{_rno_disp} / 12R</div>',
+            unsafe_allow_html=True,
+        )
+    with _nav_col3:
+        st.button(
+            f"{_rno_disp + 1}R ▶" if _rno_disp < 12 else "▶",
+            use_container_width=True,
+            disabled=(_rno_disp >= 12),
+            on_click=_go_next_race,
+        )
+    # カウントダウン（JS自動更新）
     if _dl_dt and not _is_past_deadline:
         try:
-            _rm = _remain_sec // 60
-            _rs = _remain_sec % 60
-            _remain_color = "#e05c5c" if _rm < 5 else "#7ab8e8"
-            st.markdown(
-                f'<div style="text-align:center;margin-top:-6px;margin-bottom:4px">'
-                f'<span style="color:{_remain_color};font-weight:bold;font-size:0.85rem">'
-                f'あと {_rm}分{_rs:02d}秒</span></div>',
-                unsafe_allow_html=True,
-            )
+            _dl_iso = _dl_dt.isoformat()
+            _st_html(f"""
+            <div id="countdown-box" style="text-align:center;margin-top:-6px;margin-bottom:4px">
+              <span id="countdown-text" style="font-weight:bold;font-size:0.85rem;color:#7ab8e8"></span>
+            </div>
+            <script>
+            (function(){{
+              var deadline = new Date("{_dl_iso}");
+              var el = document.getElementById("countdown-text");
+              var box = document.getElementById("countdown-box");
+              function update(){{
+                var now = new Date();
+                var diff = Math.floor((deadline - now) / 1000);
+                if(diff <= 0){{
+                  el.textContent = "締め切り済み";
+                  el.style.color = "#e05c5c";
+                  return;
+                }}
+                var m = Math.floor(diff / 60);
+                var s = diff % 60;
+                el.textContent = "あと " + m + "分" + String(s).padStart(2,"0") + "秒";
+                el.style.color = m < 5 ? "#e05c5c" : "#7ab8e8";
+              }}
+              update();
+              setInterval(update, 1000);
+            }})();
+            </script>
+            """, height=30)
         except Exception:
             pass
 
@@ -774,9 +969,271 @@ if st.session_state.result is not None:
             unsafe_allow_html=True,
         )
 
-    # ── 分析データテーブル ────────────────────────────────────────
+    # ── 3連単 全組番テーブル（確率順）【メイン予想 - 最上部表示】──
+    _3t_hdr_col1, _3t_hdr_col2 = st.columns([3, 1])
+    with _3t_hdr_col1:
+        st.markdown("### 🎯 3連単 予想")
+    with _3t_hdr_col2:
+        _odds_refresh = st.button("🔄 オッズ更新", use_container_width=True)
+
+    # オッズ更新処理（予想は再計算せず、オッズと期待値だけ再取得）
+    if _odds_refresh and st.session_state.race_no and st.session_state.date_str:
+        _ref_rno = st.session_state.race_no
+        _ref_dstr = st.session_state.date_str
+        with st.spinner("オッズを更新中..."):
+            _new_odds = fetch_odds_3t(_ref_rno, _ref_dstr)
+        if _new_odds:
+            st.session_state.odds = _new_odds
+            odds = _new_odds
+            # all_3t_candidates の期待値を再計算
+            _updated_3t = res.get("all_3t_candidates", [])
+            for _c in _updated_3t:
+                _combo_key = _c["買い目"]
+                _actual = _new_odds.get(_combo_key)
+                _c["実オッズ"] = _actual
+                if _actual is not None and _c["的中確率"] > 0:
+                    _c["期待値"] = (_c["的中確率"] / 100) * _actual
+                else:
+                    _c["期待値"] = None
+            res["all_3t_candidates"] = _updated_3t
+            st.session_state.result = res
+            st.toast("オッズを更新しました")
+        else:
+            st.warning("オッズの取得に失敗しました")
+
+    all_3t = res.get("all_3t_candidates", [])
+    if not all_3t:
+        st.warning("買い目候補がありません")
+    else:
+        # レース結果の3連単組番を取得（的中マーク用）
+        _rr = st.session_state.race_result
+        _result_combo_3t = ""
+        if _rr and _rr.get("払戻", {}).get("3連単"):
+            _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
+
+        def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
+            """3連単テーブルのHTML文字列を生成する。"""
+            _th_style = ('background:#0d2855;color:#7ab8e8;padding:8px 10px;'
+                         'font-size:0.82rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
+            hdr = (
+                f'<tr>'
+                f'<th style="{_th_style};text-align:center;width:30px">#</th>'
+                f'<th style="{_th_style};text-align:center">組番</th>'
+                f'<th style="{_th_style};text-align:right">確率</th>'
+                f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
+                f'<th style="{_th_style};text-align:right">公正ｵｯｽﾞ</th>'
+                f'<th style="{_th_style};text-align:right">期待値</th>'
+                f'</tr>'
+            )
+            body = ""
+            _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+            _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+            for idx, c in enumerate(rows):
+                combo = c["買い目"]
+                prob = c["的中確率"]
+                fair = c["公正オッズ"]
+                actual = c.get("実オッズ")
+                ev = c.get("期待値")
+
+                # 的中判定
+                _is_hit = (result_combo and
+                           combo.replace("－", "-").replace("ー", "-") == result_combo)
+
+                # 枠番バッジ
+                parts = combo.split("-")
+                nums_html = ""
+                for p in parts:
+                    bg = _FBG.get(p, "#555")
+                    fg = _FFG.get(p, "#fff")
+                    nums_html += (
+                        f'<span style="display:inline-block;width:22px;height:22px;'
+                        f'min-width:22px;line-height:22px;text-align:center;border-radius:4px;'
+                        f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
+                        f'margin:0 1px;flex-shrink:0">{p}</span>'
+                    )
+                hit_html = ""
+                if _is_hit:
+                    hit_html = (
+                        '<span style="'
+                        'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
+                        'color:#fff;font-weight:bold;font-size:0.6rem;padding:1px 4px;'
+                        'line-height:1;border-radius:6px;white-space:nowrap;'
+                        'margin-left:3px;flex-shrink:0">的中</span>'
+                    )
+                combo_html = (
+                    f'<div style="display:inline-flex;align-items:center;'
+                    f'justify-content:center;gap:2px;'
+                    f'height:22px;flex-wrap:nowrap">'
+                    f'{nums_html}{hit_html}</div>'
+                )
+
+                actual_str = f"{actual:.1f}" if actual is not None else "-"
+
+                if ev is not None:
+                    if ev >= 1.0:
+                        ev_str = f'<span style="color:#2ecc71;font-weight:bold">{ev:.2f}</span>'
+                    else:
+                        ev_str = f'<span style="color:#aaa">{ev:.2f}</span>'
+                else:
+                    ev_str = '<span style="color:#555">-</span>'
+
+                # 行背景
+                _is_zero = prob < 0.005
+                if _is_hit:
+                    row_bg = "#3a1a0a"
+                    row_border = "border-left:3px solid #ff6b00;"
+                elif ev is not None and ev >= 1.0:
+                    row_bg = "#12301a"
+                    row_border = "border-left:3px solid #2ecc71;"
+                elif _is_zero:
+                    row_bg = "#12151e"
+                    row_border = ""
+                else:
+                    row_bg = "#1a2744" if idx % 2 == 0 else "#151f35"
+                    row_border = ""
+
+                _row_num = start_num + idx
+                _zero_opacity = "opacity:0.35;" if _is_zero else ""
+                prob_str = f'<span style="color:#555">0%</span>' if _is_zero else f'{prob:.2f}%'
+                _td_base = "padding:6px 10px;vertical-align:middle;border-bottom:1px solid #2a4a80"
+                body += (
+                    f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:36px">'
+                    f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
+                    f'font-size:0.78rem">{_row_num}</td>'
+                    f'<td style="{_td_base};text-align:left">{combo_html}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#fff;'
+                    f'font-size:0.85rem">{prob_str}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#ffe066;'
+                    f'font-weight:bold;font-size:0.85rem">{actual_str}</td>'
+                    f'<td style="{_td_base};text-align:right;color:#7ab8e8;'
+                    f'font-size:0.85rem">{fair:.1f}</td>'
+                    f'<td style="{_td_base};text-align:right;'
+                    f'font-size:0.85rem">{ev_str}</td>'
+                    f'</tr>'
+                )
+            return (
+                f'<div style="overflow-x:auto;">'
+                f'<table style="border-collapse:collapse;width:100%;'
+                f'background:#1a2744;border-radius:8px;overflow:hidden">'
+                f'{hdr}{body}</table></div>'
+            )
+
+        top10 = all_3t[:10]
+        rest = all_3t[10:]
+
+        st.markdown(_render_3t_table(top10, result_combo=_result_combo_3t), unsafe_allow_html=True)
+
+        # 凡例
+        _legend_items = '🟢 緑行 = 期待値 ≧ 1.0（バリュー買い目）'
+        if _result_combo_3t:
+            _legend_items += '&nbsp;|&nbsp;🟠 橙行 = 的中'
+        _legend_items += ('&nbsp;|&nbsp;確率: Heneryモデル推定&nbsp;|&nbsp;'
+                          '公正ｵｯｽﾞ: 理論適正倍率')
+        st.markdown(
+            f'<div style="font-size:0.75rem;color:#666;margin-top:6px">'
+            f'{_legend_items}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        if rest:
+            with st.expander(f"▼ 残り {len(rest)} 件を表示"):
+                st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── AI展開予想（1マーク）─────────────────────────────────────
+    st.markdown("### 🌊 AI展開予想（1マーク）")
+    st.caption("1マーク旋回時の展開をAIが予測。コース・ST・決まり手傾向・気象条件から算出")
+
+    _tenkai_scenarios = res.get("tenkai_scenarios", [])
+    if _tenkai_scenarios:
+        _TK_BOAT_BADGE = {
+            "①": ("1", "background:#fff;color:#000;border:1px solid #888"),
+            "②": ("2", "background:#000;color:#fff"),
+            "③": ("3", "background:#e74c3c;color:#fff"),
+            "④": ("4", "background:#3498db;color:#fff"),
+            "⑤": ("5", "background:#f1c40f;color:#000"),
+            "⑥": ("6", "background:#2ecc71;color:#fff"),
+        }
+        _TK_FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+        _TK_FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+
+        for _ti, _ts in enumerate(_tenkai_scenarios):
+            stars = "★" * _ts["confidence"] + "☆" * (3 - _ts["confidence"])
+            prob_pct = _ts["probability"] * 100
+            frame = _ts.get("winner_frame", "1")
+
+            if _ti == 0:
+                border_color = "#f0a500"
+                bg = "#1a2744"
+            elif _ti == 1:
+                border_color = "#3498db"
+                bg = "#151f35"
+            else:
+                border_color = "#2a4a80"
+                bg = "#12151e"
+
+            fbg = _TK_FBG.get(frame, "#555")
+            ffg = _TK_FFG.get(frame, "#fff")
+            fborder = "border:1.5px solid #888;" if frame == "1" else ""
+            frame_badge = (
+                f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
+                f'width:24px;height:24px;font-weight:bold;font-size:0.85rem;margin-right:6px">'
+                f'{frame}</span>'
+            )
+
+            flow_html = _ts.get("flow", "")
+            for _bm, (_bd, _bs) in _TK_BOAT_BADGE.items():
+                flow_html = flow_html.replace(
+                    _bm,
+                    f'<span style="display:inline-block;{_bs};border-radius:50%;'
+                    f'width:1.4em;height:1.4em;text-align:center;line-height:1.4em;'
+                    f'font-size:0.85em;font-weight:bold;margin:0 2px">{_bd}</span>'
+                )
+
+            factors_html = ""
+            for _fk in _ts.get("key_factors", []):
+                factors_html += (
+                    f'<span style="display:inline-block;background:#0d3360;border-radius:4px;'
+                    f'padding:1px 6px;font-size:0.7rem;color:#7ab8e8;margin:2px 2px 0 0">{_fk}</span>'
+                )
+
+            st.markdown(
+                f'<div style="background:{bg};border-left:5px solid {border_color};'
+                f'padding:0.8rem 1rem;border-radius:6px;margin:6px 0">'
+                f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+                f'<div style="display:flex;align-items:center">'
+                f'{frame_badge}'
+                f'<span style="color:#ffe066;font-size:0.85rem;font-weight:bold">{_ts["title"]}</span>'
+                f'</div>'
+                f'<div style="text-align:right">'
+                f'<span style="color:#f0a500;font-size:0.85rem">{stars}</span>'
+                f'<span style="color:#7ab8e8;font-size:0.78rem;margin-left:6px">{prob_pct:.0f}%</span>'
+                f'</div>'
+                f'</div>'
+                f'<div style="color:#e8f4ff;font-size:0.85rem;line-height:1.6;margin-bottom:6px">'
+                f'{flow_html}</div>'
+                f'<div>{factors_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("展開予想を生成するのに十分なデータがありません")
+
+    st.markdown("---")
+
+    # ── タブ化: 詳細情報セクション ────────────────────────────────
     rno = st.session_state.race_no
-    st.markdown(f"### 📋 {rno}R 分析データ")
+    _tab_analysis, _tab_taka, _tab_detail = st.tabs([
+        f"📋 分析データ",
+        "🎤 高橋アナ",
+        "📊 詳細・オッズ",
+    ])
+
+    # ── [タブ1] 分析データテーブル ────────────────────────────────
+    _analysis_exp = _tab_analysis
 
     base_cols  = ["枠番", "選手名", "級別"]
     extra_cols = []
@@ -983,15 +1440,181 @@ if st.session_state.result is not None:
             )
             tbl_html = _pcss + tbl_html
 
-    st.markdown(
+    _analysis_exp.markdown(
         f'<div style="overflow-x:auto;">{tbl_html}</div>',
         unsafe_allow_html=True,
     )
 
+    # ── [タブ2] 高橋アナ予想パネル ──────────────────────────────
+    _taka_st = _tab_taka  # タブ2のコンテナ
+    taka = st.session_state.taka or {}
+
+    if taka.get("available"):
+        tenkai = taka.get("tenkai", "")
+        if tenkai and tenkai != "（入力中）":
+            _BOAT_BADGE = {
+                "①": ("1", "background:#fff;color:#000;border:1px solid #888"),
+                "②": ("2", "background:#000;color:#fff"),
+                "③": ("3", "background:#e74c3c;color:#fff"),
+                "④": ("4", "background:#3498db;color:#fff"),
+                "⑤": ("5", "background:#f1c40f;color:#000"),
+                "⑥": ("6", "background:#2ecc71;color:#fff"),
+            }
+            tenkai_html = tenkai
+            for mark, (digit, style) in _BOAT_BADGE.items():
+                tenkai_html = tenkai_html.replace(
+                    mark,
+                    f'<span style="display:inline-block;{style};'
+                    f'border-radius:50%;width:1.4em;height:1.4em;text-align:center;'
+                    f'line-height:1.4em;font-size:0.85em;font-weight:bold;margin:0 2px">{digit}</span>'
+                )
+            tenkai_html = tenkai_html.replace("\n", "<br>")
+            _taka_st.markdown(
+                f'<div style="background:#1a2744;border-left:4px solid #3498db;'
+                f'padding:0.8rem 1rem;border-radius:6px;margin-bottom:0.6rem">'
+                f'<div style="color:#7ab8e8;font-size:0.8rem;margin-bottom:4px">展開予想</div>'
+                f'<div style="color:#fff;line-height:1.8">{tenkai_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+        elif tenkai == "（入力中）":
+            _taka_st.info("高橋アナが現在入力中です。しばらく後に再取得してください。")
+        else:
+            _taka_st.caption("展開予想テキストは取得できませんでした")
+
+        yoso_list = taka.get("yoso", [])
+        if yoso_list:
+            for y in yoso_list:
+                _taka_st.markdown(
+                    f'<div style="background:#1a2744;border-left:4px solid #f0a500;'
+                    f'padding:0.5rem 1rem;border-radius:6px;margin-bottom:4px">'
+                    f'<span style="color:#7ab8e8;font-size:0.78rem">予想買い目</span>&nbsp;'
+                    f'<b style="font-size:1.2rem;color:#ffe066">{y}</b>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+        if True:  # 評価チャート（インデント維持）
+            # ── 評価チャート（公式5×5グリッド再現）─────────────────
+            positions = taka.get("chart_positions", {})
+            if positions:
+                _BOAT_BG = {
+                    "1": "#fff", "2": "#000", "3": "#e74c3c",
+                    "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
+                }
+                _BOAT_FG = {
+                    "1": "#000", "2": "#fff", "3": "#fff",
+                    "4": "#fff", "5": "#000", "6": "#fff",
+                }
+                # 5×5 グリッド構築 (row0=top=Y5, col0=left=X1)
+                grid: dict[tuple[int, int], list[tuple[str, str]]] = {}
+                for boat, pos in positions.items():
+                    key = (pos["row"], pos["col"])
+                    trend = pos.get("trend", "")
+                    arrow = "↑" if trend == "up" else ("↓" if trend == "down" else "")
+                    grid.setdefault(key, []).append((boat, arrow))
+
+                y_labels = ["5", "4", "3", "2", "1"]
+                chart_rows = ""
+                for r in range(5):
+                    cells = ""
+                    for c in range(5):
+                        boats_in_cell = grid.get((r, c), [])
+                        if boats_in_cell:
+                            badges = ""
+                            for b, arr in boats_in_cell:
+                                bg = _BOAT_BG.get(b, "#666")
+                                fg = _BOAT_FG.get(b, "#fff")
+                                border = "border:1.5px solid #888;" if b == "1" else ""
+                                arr_html = ""
+                                if arr:
+                                    arr_color = "#ff4444" if arr == "↑" else "#4488ff"
+                                    arr_html = (
+                                        f'<span style="position:absolute;top:-5px;right:-4px;'
+                                        f'font-size:0.65rem;color:{arr_color};font-weight:bold;'
+                                        f'text-shadow:0 0 2px #000">{arr}</span>'
+                                    )
+                                badges += (
+                                    f'<span style="display:inline-block;position:relative;'
+                                    f'margin:1px">'
+                                    f'<span style="display:inline-flex;align-items:center;'
+                                    f'justify-content:center;background:{bg};color:{fg};{border}'
+                                    f'border-radius:50%;width:26px;height:26px;font-weight:bold;'
+                                    f'font-size:0.8rem">{b}</span>'
+                                    f'{arr_html}</span>'
+                                )
+                            cells += f'<td style="text-align:center;padding:3px;min-width:36px">{badges}</td>'
+                        else:
+                            cells += '<td style="padding:3px;min-width:36px"></td>'
+                    y_lbl = y_labels[r]
+                    chart_rows += (
+                        f'<tr><td style="color:#7ab8e8;font-size:0.7rem;padding-right:4px;'
+                        f'text-align:right;vertical-align:middle">{y_lbl}</td>{cells}</tr>'
+                    )
+
+                x_labels_row = '<tr><td></td>'
+                for x in range(1, 6):
+                    x_labels_row += f'<td style="color:#7ab8e8;font-size:0.7rem;text-align:center">{x}</td>'
+                x_labels_row += '</tr>'
+
+                _taka_st.markdown(
+                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
+                    f'padding:8px 6px 4px 6px">'
+                    f'<div style="color:#7ab8e8;font-size:0.75rem;text-align:center;margin-bottom:4px">'
+                    f'評価チャート</div>'
+                    f'<div style="display:flex;align-items:center">'
+                    f'<div style="writing-mode:vertical-rl;color:#7ab8e8;font-size:0.65rem;'
+                    f'letter-spacing:2px;margin-right:2px">ターンの雰囲気</div>'
+                    f'<table style="border-collapse:collapse">{chart_rows}{x_labels_row}</table>'
+                    f'</div>'
+                    f'<div style="color:#7ab8e8;font-size:0.65rem;text-align:center;margin-top:2px">'
+                    f'スリット付近の勢い →</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+            # スリット順
+            slit = taka.get("slit_order", [])
+            if slit:
+                slit_badges = ""
+                for s in slit:
+                    bg = _BOAT_BG.get(str(s), "#666") if positions else "#555"
+                    fg = _BOAT_FG.get(str(s), "#fff") if positions else "#fff"
+                    border = "border:1.5px solid #888;" if str(s) == "1" else ""
+                    slit_badges += (
+                        f'<span style="display:inline-flex;align-items:center;'
+                        f'justify-content:center;background:{bg};color:{fg};{border}'
+                        f'border-radius:50%;width:22px;height:22px;font-weight:bold;'
+                        f'font-size:0.75rem;margin:0 2px">{s}</span>'
+                    )
+                _taka_st.markdown(
+                    f'<div style="background:#12301a;border-left:3px solid #2ecc71;'
+                    f'padding:0.5rem 0.8rem;border-radius:6px;margin-top:0.6rem">'
+                    f'<div style="color:#7ab8e8;font-size:0.78rem;margin-bottom:4px">スリット順</div>'
+                    f'<div>{slit_badges}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+        # スコア反映注記
+        if taka.get("chart_scores"):
+            _taka_st.caption("※ 高橋アナ評価チャートはAIスコアに反映済みです")
+    else:
+        _taka_st.markdown(
+            '<div style="background:#151f35;border:1px solid #2a4a80;border-radius:8px;'
+            'padding:1rem;color:#666;text-align:center">'
+            '高橋アナ予想は未発表またはデータ取得外です。<br>'
+            '<small>レース直前（約1〜2時間前）に「予想実行」を再クリックすると取得できる場合があります</small>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+    # ── [タブ3] 詳細・オッズ ──────────────────────────────────────
+
     # ── 選手別決まり手 ────────────────────────────────────────────
     racer_km = st.session_state.racer_km or {}
     if racer_km:
-        st.markdown("### 🎯 選手別決まり手（コース別）")
+        _km_exp = _tab_detail.expander("🎯 選手別決まり手（コース別）", expanded=False)
         if True:
             _KIMARITE_COLORS = {
                 "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
@@ -1052,7 +1675,7 @@ if st.session_state.result is not None:
                             f'</div>'
                         )
 
-                st.markdown(
+                _km_exp.markdown(
                     f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:6px;'
                     f'padding:8px 10px;margin:4px 0">'
                     f'<div style="display:flex;align-items:center;margin-bottom:4px">'
@@ -1067,233 +1690,12 @@ if st.session_state.result is not None:
                     unsafe_allow_html=True,
                 )
     else:
-        st.markdown("### 🎯 選手別決まり手（コース別）")
-        st.caption("選手別決まり手データを取得できませんでした")
+        _km_exp = _tab_detail.expander("🎯 選手別決まり手（コース別）", expanded=False)
+        _km_exp.caption("選手別決まり手データを取得できませんでした")
 
-    # ── AI展開予想（1マーク） ────────────────────────────────────
-    st.markdown("### 🌊 AI展開予想（1マーク）")
-    st.caption("1マーク旋回時の展開をAIが予測。コース・ST・決まり手傾向・気象条件から算出")
-
-    _tenkai_scenarios = res.get("tenkai_scenarios", [])
-    if _tenkai_scenarios:
-        _TK_BOAT_BADGE = {
-            "①": ("1", "background:#fff;color:#000;border:1px solid #888"),
-            "②": ("2", "background:#000;color:#fff"),
-            "③": ("3", "background:#e74c3c;color:#fff"),
-            "④": ("4", "background:#3498db;color:#fff"),
-            "⑤": ("5", "background:#f1c40f;color:#000"),
-            "⑥": ("6", "background:#2ecc71;color:#fff"),
-        }
-        _TK_FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
-        _TK_FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
-
-        for _ti, _ts in enumerate(_tenkai_scenarios):
-            stars = "★" * _ts["confidence"] + "☆" * (3 - _ts["confidence"])
-            prob_pct = _ts["probability"] * 100
-            frame = _ts.get("winner_frame", "1")
-
-            if _ti == 0:
-                border_color = "#f0a500"
-                bg = "#1a2744"
-            elif _ti == 1:
-                border_color = "#3498db"
-                bg = "#151f35"
-            else:
-                border_color = "#2a4a80"
-                bg = "#12151e"
-
-            fbg = _TK_FBG.get(frame, "#555")
-            ffg = _TK_FFG.get(frame, "#fff")
-            fborder = "border:1.5px solid #888;" if frame == "1" else ""
-            frame_badge = (
-                f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-                f'background:{fbg};color:{ffg};{fborder}border-radius:50%;'
-                f'width:24px;height:24px;font-weight:bold;font-size:0.85rem;margin-right:6px">'
-                f'{frame}</span>'
-            )
-
-            flow_html = _ts.get("flow", "")
-            for _bm, (_bd, _bs) in _TK_BOAT_BADGE.items():
-                flow_html = flow_html.replace(
-                    _bm,
-                    f'<span style="display:inline-block;{_bs};border-radius:50%;'
-                    f'width:1.4em;height:1.4em;text-align:center;line-height:1.4em;'
-                    f'font-size:0.85em;font-weight:bold;margin:0 2px">{_bd}</span>'
-                )
-
-            factors_html = ""
-            for _fk in _ts.get("key_factors", []):
-                factors_html += (
-                    f'<span style="display:inline-block;background:#0d3360;border-radius:4px;'
-                    f'padding:1px 6px;font-size:0.7rem;color:#7ab8e8;margin:2px 2px 0 0">{_fk}</span>'
-                )
-
-            st.markdown(
-                f'<div style="background:{bg};border-left:5px solid {border_color};'
-                f'padding:0.8rem 1rem;border-radius:6px;margin:6px 0">'
-                f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
-                f'<div style="display:flex;align-items:center">'
-                f'{frame_badge}'
-                f'<span style="color:#ffe066;font-size:0.85rem;font-weight:bold">{_ts["title"]}</span>'
-                f'</div>'
-                f'<div style="text-align:right">'
-                f'<span style="color:#f0a500;font-size:0.85rem">{stars}</span>'
-                f'<span style="color:#7ab8e8;font-size:0.78rem;margin-left:6px">{prob_pct:.0f}%</span>'
-                f'</div>'
-                f'</div>'
-                f'<div style="color:#e8f4ff;font-size:0.85rem;line-height:1.6;margin-bottom:6px">'
-                f'{flow_html}</div>'
-                f'<div>{factors_html}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.caption("展開予想を生成するのに十分なデータがありません")
-
-    # ── 3連単 全組番テーブル（確率順） ──────────────────────────
-    st.markdown("### 🎯 3連単 予想")
-    all_3t = res.get("all_3t_candidates", [])
-    if not all_3t:
-        st.warning("買い目候補がありません")
-    else:
-        # レース結果の3連単組番を取得（的中マーク用）
-        _rr = st.session_state.race_result
-        _result_combo_3t = ""
-        if _rr and _rr.get("払戻", {}).get("3連単"):
-            _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
-
-        def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
-            """3連単テーブルのHTML文字列を生成する。"""
-            _th_style = ('background:#0d2855;color:#7ab8e8;padding:8px 10px;'
-                         'font-size:0.82rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
-            hdr = (
-                f'<tr>'
-                f'<th style="{_th_style};text-align:center;width:30px">#</th>'
-                f'<th style="{_th_style};text-align:center">組番</th>'
-                f'<th style="{_th_style};text-align:right">確率</th>'
-                f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
-                f'<th style="{_th_style};text-align:right">公正ｵｯｽﾞ</th>'
-                f'<th style="{_th_style};text-align:right">期待値</th>'
-                f'</tr>'
-            )
-            body = ""
-            _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
-            _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
-            for idx, c in enumerate(rows):
-                combo = c["買い目"]
-                prob = c["的中確率"]
-                fair = c["公正オッズ"]
-                actual = c.get("実オッズ")
-                ev = c.get("期待値")
-
-                # 的中判定
-                _is_hit = (result_combo and
-                           combo.replace("－", "-").replace("ー", "-") == result_combo)
-
-                # 枠番バッジ
-                parts = combo.split("-")
-                nums_html = ""
-                for p in parts:
-                    bg = _FBG.get(p, "#555")
-                    fg = _FFG.get(p, "#fff")
-                    nums_html += (
-                        f'<span style="display:inline-block;width:22px;height:22px;'
-                        f'min-width:22px;line-height:22px;text-align:center;border-radius:4px;'
-                        f'background:{bg};color:{fg};font-weight:bold;font-size:0.82rem;'
-                        f'margin:0 1px;flex-shrink:0">{p}</span>'
-                    )
-                hit_html = ""
-                if _is_hit:
-                    hit_html = (
-                        '<span style="'
-                        'background:linear-gradient(135deg,#ff6b00,#ff2d00);'
-                        'color:#fff;font-weight:bold;font-size:0.6rem;padding:1px 4px;'
-                        'line-height:1;border-radius:6px;white-space:nowrap;'
-                        'margin-left:3px;flex-shrink:0">的中</span>'
-                    )
-                combo_html = (
-                    f'<div style="display:inline-flex;align-items:center;'
-                    f'justify-content:center;gap:2px;'
-                    f'height:22px;flex-wrap:nowrap">'
-                    f'{nums_html}{hit_html}</div>'
-                )
-
-                actual_str = f"{actual:.1f}" if actual is not None else "-"
-
-                if ev is not None:
-                    if ev >= 1.0:
-                        ev_str = f'<span style="color:#2ecc71;font-weight:bold">{ev:.2f}</span>'
-                    else:
-                        ev_str = f'<span style="color:#aaa">{ev:.2f}</span>'
-                else:
-                    ev_str = '<span style="color:#555">-</span>'
-
-                # 行背景
-                _is_zero = prob < 0.005
-                if _is_hit:
-                    row_bg = "#3a1a0a"
-                    row_border = "border-left:3px solid #ff6b00;"
-                elif ev is not None and ev >= 1.0:
-                    row_bg = "#12301a"
-                    row_border = "border-left:3px solid #2ecc71;"
-                elif _is_zero:
-                    row_bg = "#12151e"
-                    row_border = ""
-                else:
-                    row_bg = "#1a2744" if idx % 2 == 0 else "#151f35"
-                    row_border = ""
-
-                _row_num = start_num + idx
-                _zero_opacity = "opacity:0.35;" if _is_zero else ""
-                prob_str = f'<span style="color:#555">0%</span>' if _is_zero else f'{prob:.2f}%'
-                _td_base = "padding:6px 10px;vertical-align:middle;border-bottom:1px solid #2a4a80"
-                body += (
-                    f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:36px">'
-                    f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
-                    f'font-size:0.78rem">{_row_num}</td>'
-                    f'<td style="{_td_base};text-align:left">{combo_html}</td>'
-                    f'<td style="{_td_base};text-align:right;color:#fff;'
-                    f'font-size:0.85rem">{prob_str}</td>'
-                    f'<td style="{_td_base};text-align:right;color:#ffe066;'
-                    f'font-weight:bold;font-size:0.85rem">{actual_str}</td>'
-                    f'<td style="{_td_base};text-align:right;color:#7ab8e8;'
-                    f'font-size:0.85rem">{fair:.1f}</td>'
-                    f'<td style="{_td_base};text-align:right;'
-                    f'font-size:0.85rem">{ev_str}</td>'
-                    f'</tr>'
-                )
-            return (
-                f'<div style="overflow-x:auto;">'
-                f'<table style="border-collapse:collapse;width:100%;'
-                f'background:#1a2744;border-radius:8px;overflow:hidden">'
-                f'{hdr}{body}</table></div>'
-            )
-
-        top10 = all_3t[:10]
-        rest = all_3t[10:]
-
-        st.markdown(_render_3t_table(top10, result_combo=_result_combo_3t), unsafe_allow_html=True)
-
-        # 凡例
-        _legend_items = '🟢 緑行 = 期待値 ≧ 1.0（バリュー買い目）'
-        if _result_combo_3t:
-            _legend_items += '&nbsp;|&nbsp;🟠 橙行 = 的中'
-        _legend_items += ('&nbsp;|&nbsp;確率: Heneryモデル推定&nbsp;|&nbsp;'
-                          '公正ｵｯｽﾞ: 理論適正倍率')
-        st.markdown(
-            f'<div style="font-size:0.75rem;color:#666;margin-top:6px">'
-            f'{_legend_items}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        if rest:
-            with st.expander(f"▼ 残り {len(rest)} 件を表示"):
-                st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
-
-    # ── 3連単オッズ一覧表 ────────────────────────────────────────
+    # ── 3連単オッズ一覧表（expander） ──────────────────────────
     if odds:
-        st.markdown("### 📊 3連単オッズ一覧")
+        _odds_exp = _tab_detail.expander("📊 3連単オッズ一覧", expanded=False)
         if True:
             _OBG = {
                 "1": "#fff", "2": "#000", "3": "#e74c3c",
@@ -1411,17 +1813,14 @@ if st.session_state.result is not None:
                 f'<table style="border-collapse:collapse;width:100%;'
                 f'background:#fff">{_hdr}{_body}</table>'
             )
-            st.markdown(
+            _odds_exp.markdown(
                 f'<div style="overflow-x:auto;'
                 f'">{_odds_tbl}</div>',
                 unsafe_allow_html=True,
             )
 
-    st.markdown("---")
-
-    # ── 艇別パフォーマンスレーダーチャート ──────────────────────
-    st.markdown("### 📡 艇別パフォーマンスレーダーチャート")
-    st.caption("各艇の指標をレーダー表示（スコアはレース内相対値）")
+    # ── 艇別パフォーマンスレーダーチャート（expander） ─────────
+    _radar_exp = _tab_detail.expander("📡 艇別パフォーマンスレーダーチャート", expanded=False)
 
     def _make_radar_chart(df_scored: pd.DataFrame) -> go.Figure:
         """scored DataFrameから艇別レーダーチャートを生成する。"""
@@ -1438,7 +1837,7 @@ if st.session_state.result is not None:
 
         # 各次元の有効値を0-100正規化（欠損値は除外して正規化）
         # 競艇公式カラー: 1白, 2黒, 3赤, 4青, 5黄, 6緑
-        boat_colors = ["#888888", "#222222", "#e74c3c", "#2563eb", "#d4a017", "#2ecc71"]
+        boat_colors = ["#cccccc", "#666666", "#e74c3c", "#2563eb", "#d4a017", "#2ecc71"]
         radar_dims: list[str] = []
         radar_data: dict[str, list[float]] = {}  # frame -> normalized values per dim
 
@@ -1496,15 +1895,15 @@ if st.session_state.result is not None:
             polar=dict(
                 radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
                 angularaxis=dict(
-                    tickfont=dict(size=11, color="#334"),
+                    tickfont=dict(size=11, color="#7ab8e8"),
                     rotation=90,
                     direction="clockwise",
                 ),
-                bgcolor="#f0f2f6",
+                bgcolor="#0e1a2e",
             ),
             showlegend=True,
-            legend=dict(font=dict(color="#334"), bgcolor="rgba(255,255,255,0.7)"),
-            paper_bgcolor="#f0f2f6",
+            legend=dict(font=dict(color="#e8f4ff"), bgcolor="rgba(14,26,46,0.8)"),
+            paper_bgcolor="#0e1a2e",
             margin=dict(l=20, r=20, t=20, b=20),
             height=340,
         )
@@ -1512,180 +1911,12 @@ if st.session_state.result is not None:
 
     radar_fig = _make_radar_chart(scored)
     if radar_fig.data:
-        st.plotly_chart(radar_fig, use_container_width=True, config={"staticPlot": True})
+        _radar_exp.plotly_chart(radar_fig, use_container_width=True, config={"staticPlot": True})
     else:
-        st.caption("レーダーチャートを表示するのに十分なデータがありません")
-
-    st.markdown("---")
-
-    # ── 高橋アナ予想パネル ────────────────────────────────────────
-    taka = st.session_state.taka or {}
-    st.markdown("### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
-
-    if taka.get("available"):
-        tenkai = taka.get("tenkai", "")
-        if tenkai and tenkai != "（入力中）":
-            _BOAT_BADGE = {
-                "①": ("1", "background:#fff;color:#000;border:1px solid #888"),
-                "②": ("2", "background:#000;color:#fff"),
-                "③": ("3", "background:#e74c3c;color:#fff"),
-                "④": ("4", "background:#3498db;color:#fff"),
-                "⑤": ("5", "background:#f1c40f;color:#000"),
-                "⑥": ("6", "background:#2ecc71;color:#fff"),
-            }
-            tenkai_html = tenkai
-            for mark, (digit, style) in _BOAT_BADGE.items():
-                tenkai_html = tenkai_html.replace(
-                    mark,
-                    f'<span style="display:inline-block;{style};'
-                    f'border-radius:50%;width:1.4em;height:1.4em;text-align:center;'
-                    f'line-height:1.4em;font-size:0.85em;font-weight:bold;margin:0 2px">{digit}</span>'
-                )
-            tenkai_html = tenkai_html.replace("\n", "<br>")
-            st.markdown(
-                f'<div style="background:#1a2744;border-left:4px solid #3498db;'
-                f'padding:0.8rem 1rem;border-radius:6px;margin-bottom:0.6rem">'
-                f'<div style="color:#7ab8e8;font-size:0.8rem;margin-bottom:4px">展開予想</div>'
-                f'<div style="color:#fff;line-height:1.8">{tenkai_html}</div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-        elif tenkai == "（入力中）":
-            st.info("高橋アナが現在入力中です。しばらく後に再取得してください。")
-        else:
-            st.caption("展開予想テキストは取得できませんでした")
-
-        yoso_list = taka.get("yoso", [])
-        if yoso_list:
-            for y in yoso_list:
-                st.markdown(
-                    f'<div style="background:#1a2744;border-left:4px solid #f0a500;'
-                    f'padding:0.5rem 1rem;border-radius:6px;margin-bottom:4px">'
-                    f'<span style="color:#7ab8e8;font-size:0.78rem">予想買い目</span>&nbsp;'
-                    f'<b style="font-size:1.2rem;color:#ffe066">{y}</b>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-
-        if True:  # 評価チャート（インデント維持）
-            # ── 評価チャート（公式5×5グリッド再現）─────────────────
-            positions = taka.get("chart_positions", {})
-            if positions:
-                _BOAT_BG = {
-                    "1": "#fff", "2": "#000", "3": "#e74c3c",
-                    "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
-                }
-                _BOAT_FG = {
-                    "1": "#000", "2": "#fff", "3": "#fff",
-                    "4": "#fff", "5": "#000", "6": "#fff",
-                }
-                # 5×5 グリッド構築 (row0=top=Y5, col0=left=X1)
-                grid: dict[tuple[int, int], list[tuple[str, str]]] = {}
-                for boat, pos in positions.items():
-                    key = (pos["row"], pos["col"])
-                    trend = pos.get("trend", "")
-                    arrow = "↑" if trend == "up" else ("↓" if trend == "down" else "")
-                    grid.setdefault(key, []).append((boat, arrow))
-
-                y_labels = ["5", "4", "3", "2", "1"]
-                chart_rows = ""
-                for r in range(5):
-                    cells = ""
-                    for c in range(5):
-                        boats_in_cell = grid.get((r, c), [])
-                        if boats_in_cell:
-                            badges = ""
-                            for b, arr in boats_in_cell:
-                                bg = _BOAT_BG.get(b, "#666")
-                                fg = _BOAT_FG.get(b, "#fff")
-                                border = "border:1.5px solid #888;" if b == "1" else ""
-                                arr_html = ""
-                                if arr:
-                                    arr_color = "#ff4444" if arr == "↑" else "#4488ff"
-                                    arr_html = (
-                                        f'<span style="position:absolute;top:-5px;right:-4px;'
-                                        f'font-size:0.65rem;color:{arr_color};font-weight:bold;'
-                                        f'text-shadow:0 0 2px #000">{arr}</span>'
-                                    )
-                                badges += (
-                                    f'<span style="display:inline-block;position:relative;'
-                                    f'margin:1px">'
-                                    f'<span style="display:inline-flex;align-items:center;'
-                                    f'justify-content:center;background:{bg};color:{fg};{border}'
-                                    f'border-radius:50%;width:26px;height:26px;font-weight:bold;'
-                                    f'font-size:0.8rem">{b}</span>'
-                                    f'{arr_html}</span>'
-                                )
-                            cells += f'<td style="text-align:center;padding:3px;min-width:36px">{badges}</td>'
-                        else:
-                            cells += '<td style="padding:3px;min-width:36px"></td>'
-                    y_lbl = y_labels[r]
-                    chart_rows += (
-                        f'<tr><td style="color:#7ab8e8;font-size:0.7rem;padding-right:4px;'
-                        f'text-align:right;vertical-align:middle">{y_lbl}</td>{cells}</tr>'
-                    )
-
-                x_labels_row = '<tr><td></td>'
-                for x in range(1, 6):
-                    x_labels_row += f'<td style="color:#7ab8e8;font-size:0.7rem;text-align:center">{x}</td>'
-                x_labels_row += '</tr>'
-
-                st.markdown(
-                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
-                    f'padding:8px 6px 4px 6px">'
-                    f'<div style="color:#7ab8e8;font-size:0.75rem;text-align:center;margin-bottom:4px">'
-                    f'評価チャート</div>'
-                    f'<div style="display:flex;align-items:center">'
-                    f'<div style="writing-mode:vertical-rl;color:#7ab8e8;font-size:0.65rem;'
-                    f'letter-spacing:2px;margin-right:2px">ターンの雰囲気</div>'
-                    f'<table style="border-collapse:collapse">{chart_rows}{x_labels_row}</table>'
-                    f'</div>'
-                    f'<div style="color:#7ab8e8;font-size:0.65rem;text-align:center;margin-top:2px">'
-                    f'スリット付近の勢い →</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-
-            # スリット順
-            slit = taka.get("slit_order", [])
-            if slit:
-                slit_badges = ""
-                for s in slit:
-                    bg = _BOAT_BG.get(str(s), "#666") if positions else "#555"
-                    fg = _BOAT_FG.get(str(s), "#fff") if positions else "#fff"
-                    border = "border:1.5px solid #888;" if str(s) == "1" else ""
-                    slit_badges += (
-                        f'<span style="display:inline-flex;align-items:center;'
-                        f'justify-content:center;background:{bg};color:{fg};{border}'
-                        f'border-radius:50%;width:22px;height:22px;font-weight:bold;'
-                        f'font-size:0.75rem;margin:0 2px">{s}</span>'
-                    )
-                st.markdown(
-                    f'<div style="background:#12301a;border-left:3px solid #2ecc71;'
-                    f'padding:0.5rem 0.8rem;border-radius:6px;margin-top:0.6rem">'
-                    f'<div style="color:#7ab8e8;font-size:0.78rem;margin-bottom:4px">スリット順</div>'
-                    f'<div>{slit_badges}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-
-        # スコア反映注記
-        if taka.get("chart_scores"):
-            st.caption("※ 高橋アナ評価チャートはAIスコアに反映済みです")
-    else:
-        st.markdown(
-            '<div style="background:#151f35;border:1px solid #2a4a80;border-radius:8px;'
-            'padding:1rem;color:#666;text-align:center">'
-            '高橋アナ予想は未発表またはデータ取得外です。<br>'
-            '<small>レース直前（約1〜2時間前）に「予想実行」を再クリックすると取得できる場合があります</small>'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-    st.markdown("---")
+        _radar_exp.caption("レーダーチャートを表示するのに十分なデータがありません")
 
     # ── 予想パラメータ一覧 ────────────────────────────────────────
-    with st.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
+    with _tab_detail.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
         from config import SCORE_WEIGHTS as _W, GAMAGORI_SETTINGS as _G
 
         param_groups = [
