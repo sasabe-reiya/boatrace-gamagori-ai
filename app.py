@@ -202,6 +202,19 @@ st.markdown("""
     /* ── 買い目グループヘッダー ─────────────────────────── */
     .group-header { text-align: center; font-size: 1rem; font-weight: bold; padding-bottom: 4px; margin-bottom: 6px; }
 
+    /* ── モバイルでもカラムを横並び維持 ──────────────────── */
+    @media (max-width: 768px) {
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 0.3rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 0 !important;
+            width: auto !important;
+            flex: 1 1 0 !important;
+        }
+    }
+
     /* ── サイドバー非表示（設定はメインエリアのexpanderに移動済み） */
     section[data-testid="stSidebar"],
     button[data-testid="stSidebarCollapsedControl"],
@@ -298,10 +311,15 @@ st.markdown(
     </style>""",
     unsafe_allow_html=True,
 )
+if "running" not in st.session_state:
+    st.session_state.running = False
+_ui_disabled = st.session_state.running
+
 app_mode = st.radio(
     "モード", ["予想", "出走表一覧"], horizontal=True,
     label_visibility="collapsed",
     key="app_mode",
+    disabled=_ui_disabled,
 )
 
 if app_mode == "予想":
@@ -323,12 +341,14 @@ if app_mode == "予想":
         if rno > 1:
             st.session_state.nav_race = rno - 1
             st.session_state.result = None  # 結果をクリアして再実行トリガー
+            st.session_state.running = True
 
     def _go_next_race():
         rno = st.session_state.race_no or 1
         if rno < 12:
             st.session_state.nav_race = rno + 1
             st.session_state.result = None
+            st.session_state.running = True
 
     # ── セッション喪失時のキャッシュ復元 ─────────────────────────────
     # Google Appなどのインアプリブラウザでセッションが切断された場合、
@@ -393,7 +413,7 @@ if app_mode == "予想":
                 unsafe_allow_html=True,
             )
             _saved_race = max(1, min(12, int(st.query_params.get("race", 1))))
-            race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R")
+            race_no   = st.radio("レース番号", list(range(1, 13)), index=_saved_race - 1, horizontal=True, format_func=lambda x: f"{x}R", disabled=_ui_disabled)
             if str(race_no) != st.query_params.get("race"):
                 st.query_params["race"] = str(race_no)
             _d_param = st.query_params.get("d")
@@ -404,8 +424,9 @@ if app_mode == "予想":
                     _default_date = date.today()
             else:
                 _default_date = date.today()
-            race_date = st.date_input("開催日", _default_date)
-            fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True)
+            race_date = st.date_input("開催日", _default_date, disabled=_ui_disabled)
+            fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True, disabled=_ui_disabled,
+                                   on_click=lambda: st.session_state.update(running=True))
 
     # ── 予想実行（ナビゲーション経由の自動実行を含む）───────────────
     _nav_auto = False
@@ -504,6 +525,7 @@ if app_mode == "予想":
                 progress_bar.progress(100, text="❌ 予想計算エラー")
                 time.sleep(1)
                 progress_bar.empty()
+                st.session_state.running = False
                 st.error(f"予想計算中にエラーが発生しました: {e}")
                 st.stop()
 
@@ -542,13 +564,19 @@ if app_mode == "予想":
 
             # 設定パネルをたたんで再描画
             st.session_state.show_settings = False
+            st.session_state.running = False
             st.rerun()
 
         else:
             progress_bar.progress(100, text="❌ データ取得失敗")
             time.sleep(1)
             progress_bar.empty()
+            st.session_state.running = False
             st.error("データが取得できませんでした。開催時間外の可能性があります。")
+
+    # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
+    if st.session_state.running:
+        st.session_state.running = False
 
     # ── 結果表示 ─────────────────────────────────────────────────────
     if st.session_state.result is not None:
@@ -1920,17 +1948,21 @@ else:
     else:
         _default_date_s = date.today()
 
-    shutsusou_date = st.date_input("開催日", _default_date_s, key="shutsusou_date_input")
-    fetch_shutsusou = st.button("▶ 出走表を取得", type="primary", use_container_width=True)
+    shutsusou_date = st.date_input("開催日", _default_date_s, key="shutsusou_date_input", disabled=_ui_disabled)
+    fetch_shutsusou = st.button("▶ 出走表を取得", type="primary", use_container_width=True, disabled=_ui_disabled,
+                                on_click=lambda: st.session_state.update(running=True))
 
     if fetch_shutsusou:
         d_str_s = shutsusou_date.strftime("%Y%m%d")
         progress = st.progress(0, text="⏳ 全レースの出走表を取得中...")
 
         all_race_data = {}
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        import requests as _requests
+        _session = _requests.Session()
+        _session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        with ThreadPoolExecutor(max_workers=12) as executor:
             futures = {
-                executor.submit(fetch_race_card, rno, d_str_s): rno
+                executor.submit(fetch_race_card, rno, d_str_s, session=_session): rno
                 for rno in range(1, 13)
             }
             done = 0
@@ -1947,6 +1979,7 @@ else:
                         all_race_data[rno] = df
                 except Exception:
                     pass
+        _session.close()
 
         progress.progress(100, text="✅ 出走表取得完了")
         time.sleep(0.3)
@@ -1954,6 +1987,11 @@ else:
 
         st.session_state.shutsusou_data = all_race_data
         st.session_state.shutsusou_date = d_str_s
+        st.session_state.running = False
+
+    # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
+    if st.session_state.running:
+        st.session_state.running = False
 
     # ── 出走表表示 ─────────────────────────────────────────────
     if st.session_state.shutsusou_data:
@@ -1970,54 +2008,60 @@ else:
             if df is None:
                 continue
 
-            with st.expander(f"**{rno}R**", expanded=True):
-                # HTMLテーブルで表示
-                html_rows = []
-                for _, row in df.iterrows():
-                    waku = int(row.get("枠番", 0))
-                    bg, fg = _WAKU_COLORS.get(waku, ("#555", "#fff"))
-                    name = row.get("選手名", "")
-                    rank = row.get("級別", "")
-                    nw = row.get("全国勝率", "-")
-                    lw = row.get("蒲郡勝率", "-")
-                    m2 = row.get("モーター2連率", "-")
-                    b2 = row.get("ボート2連率", "-")
-                    st_val = row.get("スタートタイミング", "-")
+            # レース番号ヘッダ
+            st.markdown(
+                f'<div style="color:#fff;font-weight:bold;font-size:0.95rem;'
+                f'margin-top:0.8rem;margin-bottom:0.3rem;padding:4px 8px;'
+                f'background:#1a3a6a;border-radius:4px">{rno}R</div>',
+                unsafe_allow_html=True,
+            )
+            # HTMLテーブルで表示
+            html_rows = []
+            for _, row in df.iterrows():
+                waku = int(row.get("枠番", 0))
+                bg, fg = _WAKU_COLORS.get(waku, ("#555", "#fff"))
+                name = row.get("選手名", "")
+                rank = row.get("級別", "")
+                nw = row.get("全国勝率", "-")
+                lw = row.get("蒲郡勝率", "-")
+                m2 = row.get("モーター2連率", "-")
+                b2 = row.get("ボート2連率", "-")
+                st_val = row.get("スタートタイミング", "-")
 
-                    nw = f"{nw:.2f}" if isinstance(nw, (int, float)) and nw is not None else "-"
-                    lw = f"{lw:.2f}" if isinstance(lw, (int, float)) and lw is not None else "-"
-                    m2 = f"{m2:.1f}" if isinstance(m2, (int, float)) and m2 is not None else "-"
-                    b2 = f"{b2:.1f}" if isinstance(b2, (int, float)) and b2 is not None else "-"
-                    st_val = f"{st_val:.2f}" if isinstance(st_val, (int, float)) and st_val is not None else "-"
+                nw = f"{nw:.2f}" if isinstance(nw, (int, float)) and nw is not None else "-"
+                lw = f"{lw:.2f}" if isinstance(lw, (int, float)) and lw is not None else "-"
+                m2 = f"{m2:.1f}" if isinstance(m2, (int, float)) and m2 is not None else "-"
+                b2 = f"{b2:.1f}" if isinstance(b2, (int, float)) and b2 is not None else "-"
+                st_val = f"{st_val:.2f}" if isinstance(st_val, (int, float)) and st_val is not None else "-"
 
-                    html_rows.append(
-                        f'<tr>'
-                        f'<td style="background:{bg};color:{fg};text-align:center;'
-                        f'font-weight:bold;width:30px;border-radius:4px">{waku}</td>'
-                        f'<td style="color:#fff;font-weight:bold;padding-left:8px">{name}'
-                        f' <span style="color:#7ab8e8;font-size:0.75rem">{rank}</span></td>'
-                        f'<td style="color:#cce0ff;text-align:right">{nw}</td>'
-                        f'<td style="color:#cce0ff;text-align:right">{lw}</td>'
-                        f'<td style="color:#cce0ff;text-align:right">{m2}</td>'
-                        f'<td style="color:#cce0ff;text-align:right">{b2}</td>'
-                        f'<td style="color:#cce0ff;text-align:right">{st_val}</td>'
-                        f'</tr>'
-                    )
-
-                table_html = (
-                    '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:0">'
-                    '<thead><tr style="border-bottom:1px solid #2a4a80">'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px">枠</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:left">選手名</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">全国</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">蒲郡</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾓｰﾀ</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾎﾞｰﾄ</th>'
-                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ST</th>'
-                    '</tr></thead>'
-                    '<tbody>' + ''.join(html_rows) + '</tbody></table>'
+                html_rows.append(
+                    f'<tr>'
+                    f'<td style="background:{bg};color:{fg};text-align:center;'
+                    f'font-weight:bold;width:30px;border-radius:4px">{waku}</td>'
+                    f'<td style="color:#fff;font-weight:bold;padding-left:8px">{name}'
+                    f' <span style="color:#7ab8e8;font-size:0.75rem">{rank}</span></td>'
+                    f'<td style="color:#cce0ff;text-align:right">{nw}</td>'
+                    f'<td style="color:#cce0ff;text-align:right">{lw}</td>'
+                    f'<td style="color:#cce0ff;text-align:right">{m2}</td>'
+                    f'<td style="color:#cce0ff;text-align:right">{b2}</td>'
+                    f'<td style="color:#cce0ff;text-align:right">{st_val}</td>'
+                    f'</tr>'
                 )
-                st.markdown(table_html, unsafe_allow_html=True)
+
+            table_html = (
+                '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:0">'
+                '<thead><tr style="border-bottom:1px solid #2a4a80">'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px">枠</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:left">選手名</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">全国勝率</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">当地勝率</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾓｰﾀｰ2連率</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾎﾞｰﾄ2連率</th>'
+                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ST</th>'
+                '</tr></thead>'
+                '<tbody>' + ''.join(html_rows) + '</tbody></table>'
+            )
+            st.markdown(table_html, unsafe_allow_html=True)
 
 # ── フッター（バージョン情報）────────────────────────────────────
 st.markdown("---")

@@ -23,9 +23,10 @@ except ImportError:
     JYCD = "07"
     HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-def _get_soup(url: str, params: dict) -> BeautifulSoup | None:
+def _get_soup(url: str, params: dict, session: requests.Session | None = None) -> BeautifulSoup | None:
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        _req = session if session else requests
+        resp = _req.get(url, params=params, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         resp.encoding = "utf-8"
         return BeautifulSoup(resp.text, "lxml")
@@ -47,19 +48,19 @@ def _zenkaku_to_frame(s: str) -> str:
     return mapping.get(s.strip(), s.strip())
 
 
-def _fetch_racelist_soup(race_no: int, date_str: str) -> BeautifulSoup | None:
+def _fetch_racelist_soup(race_no: int, date_str: str, session: requests.Session | None = None) -> BeautifulSoup | None:
     """racelist ページの BeautifulSoup を返す（soup 共有用）。"""
     url = f"{BASE_URL}/owpc/pc/race/racelist"
     params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
-    return _get_soup(url, params)
+    return _get_soup(url, params, session=session)
 
 
 # ─────────────────────────────────────────────
 # 1. 出走表取得
 # ─────────────────────────────────────────────
-def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None) -> pd.DataFrame:
+def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None, session: requests.Session | None = None) -> pd.DataFrame:
     if date_str is None: date_str = datetime.now().strftime("%Y%m%d")
-    soup = _soup if _soup is not None else _fetch_racelist_soup(race_no, date_str)
+    soup = _soup if _soup is not None else _fetch_racelist_soup(race_no, date_str, session=session)
     if not soup: return pd.DataFrame()
 
     tbody_list = soup.find_all("tbody", class_=re.compile("is-fs12"))
