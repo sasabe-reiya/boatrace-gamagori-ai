@@ -229,7 +229,7 @@ st.markdown("""
         .main-header h1 { font-size: 1.1rem; letter-spacing: 1px; }
         .main-header .logo-sub { font-size: 0.58rem; letter-spacing: 3px; }
         .main-header .logo-icon svg { width: 38px; height: 38px; }
-        h3 { font-size: 1.1rem !important; }
+        h3 { font-size: 0.95rem !important; }
 
         /* ボタンを押しやすく */
         .stButton > button { min-height: 48px !important; font-size: 1rem !important; }
@@ -244,18 +244,18 @@ st.markdown("""
         .stPlotlyChart { max-height: 320px; }
 
         /* 三連単オッズ一覧：モバイル横スクロール防止 */
-        .odds-3t-wrap table th { font-size: 0.6rem !important; padding: 3px 2px !important; }
-        .odds-3t-wrap table td { font-size: 0.65rem !important; padding: 1px 2px !important; }
-        .odds-3t-wrap table td[style*="width:20px"] { width: 16px !important; min-width: 16px !important; }
+        .odds-3t-wrap table th { font-size: 0.5rem !important; padding: 1px 1px !important; }
+        .odds-3t-wrap table td { font-size: 0.5rem !important; padding: 1px 1px !important; }
+        .odds-3t-wrap table td[style*="width:14px"] { width: 12px !important; min-width: 12px !important; }
 
         /* 展示データ：モバイル横スクロール防止 */
         .exhibit-wrap table th { font-size: 0.68rem !important; padding: 5px 3px !important; }
         .exhibit-wrap table td { font-size: 0.7rem !important; padding: 4px 3px !important; }
 
         /* 三連単予想：モバイル横スクロール防止 */
-        .sanrentan-wrap table th { font-size: 0.7rem !important; padding: 5px 4px !important; }
-        .sanrentan-wrap table td { font-size: 0.72rem !important; padding: 4px 4px !important; }
-        .sanrentan-wrap table td .frame-badge { width: 18px !important; height: 18px !important; min-width: 18px !important; line-height: 18px !important; font-size: 0.7rem !important; }
+        .sanrentan-wrap table th { font-size: 0.6rem !important; padding: 2px 2px !important; }
+        .sanrentan-wrap table td { font-size: 0.65rem !important; padding: 2px 2px !important; }
+        .sanrentan-wrap table td .frame-badge { width: 16px !important; height: 16px !important; min-width: 16px !important; line-height: 16px !important; font-size: 0.6rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -963,12 +963,12 @@ if app_mode == "予想":
 
             def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
                 """3連単テーブルのHTML文字列を生成する。"""
-                _th_style = ('background:#0d2855;color:#7ab8e8;padding:6px 6px;'
-                             'font-size:0.75rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
+                _th_style = ('background:#0d2855;color:#7ab8e8;padding:4px 3px;'
+                             'font-size:0.7rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
                 hdr = (
                     f'<tr>'
-                    f'<th style="{_th_style};text-align:center;width:30px">#</th>'
-                    f'<th style="{_th_style};text-align:center">組番</th>'
+                    f'<th style="{_th_style};text-align:center;width:24px">#</th>'
+                    f'<th style="{_th_style};text-align:center;width:28%">組番</th>'
                     f'<th style="{_th_style};text-align:right">確率</th>'
                     f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
                     f'<th style="{_th_style};text-align:right">公正ｵｯｽﾞ</th>'
@@ -996,9 +996,9 @@ if app_mode == "予想":
                         bg = _FBG.get(p, "#555")
                         fg = _FFG.get(p, "#fff")
                         nums_html += (
-                            f'<span class="frame-badge" style="display:inline-block;width:20px;height:20px;'
-                            f'min-width:20px;line-height:20px;text-align:center;border-radius:4px;'
-                            f'background:{bg};color:{fg};font-weight:bold;font-size:0.75rem;'
+                            f'<span class="frame-badge" style="display:inline-block;width:18px;height:18px;'
+                            f'min-width:18px;line-height:18px;text-align:center;border-radius:4px;'
+                            f'background:{bg};color:{fg};font-weight:bold;font-size:0.7rem;'
                             f'margin:0 1px;flex-shrink:0">{p}</span>'
                         )
                     hit_html = ""
@@ -1017,7 +1017,10 @@ if app_mode == "予想":
                         f'{nums_html}{hit_html}</div>'
                     )
 
-                    actual_str = f"{actual:.1f}" if actual is not None else "-"
+                    if actual is not None:
+                        actual_str = "999" if actual > 999 else f"{actual:.1f}"
+                    else:
+                        actual_str = "-"
 
                     if ev is not None:
                         if ev >= 1.0:
@@ -1045,25 +1048,25 @@ if app_mode == "予想":
                     _row_num = start_num + idx
                     _zero_opacity = "opacity:0.35;" if _is_zero else ""
                     prob_str = f'<span style="color:#555">0%</span>' if _is_zero else f'{prob:.2f}%'
-                    _td_base = "padding:5px 6px;vertical-align:middle;border-bottom:1px solid #2a4a80"
+                    _td_base = "padding:3px 3px;vertical-align:middle;border-bottom:1px solid #2a4a80"
                     body += (
-                        f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:36px">'
+                        f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:32px">'
                         f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
-                        f'font-size:0.78rem">{_row_num}</td>'
+                        f'font-size:0.72rem">{_row_num}</td>'
                         f'<td style="{_td_base};text-align:left">{combo_html}</td>'
                         f'<td style="{_td_base};text-align:right;color:#fff;'
-                        f'font-size:0.85rem">{prob_str}</td>'
+                        f'font-size:0.78rem">{prob_str}</td>'
                         f'<td style="{_td_base};text-align:right;color:#ffe066;'
-                        f'font-weight:bold;font-size:0.85rem">{actual_str}</td>'
+                        f'font-weight:bold;font-size:0.78rem">{actual_str}</td>'
                         f'<td style="{_td_base};text-align:right;color:#7ab8e8;'
-                        f'font-size:0.85rem">{fair:.1f}</td>'
+                        f'font-size:0.78rem">{"999" if fair > 999 else f"{fair:.1f}"}</td>'
                         f'<td style="{_td_base};text-align:right;'
-                        f'font-size:0.85rem">{ev_str}</td>'
+                        f'font-size:0.78rem">{ev_str}</td>'
                         f'</tr>'
                     )
                 return (
-                    f'<div class="sanrentan-wrap" style="overflow-x:auto;">'
-                    f'<table style="border-collapse:collapse;width:100%;'
+                    f'<div class="sanrentan-wrap" style="overflow-x:hidden;">'
+                    f'<table style="border-collapse:collapse;width:100%;table-layout:fixed;'
                     f'background:#1a2744;border-radius:8px;overflow:hidden">'
                     f'{hdr}{body}</table></div>'
                 )
@@ -1433,7 +1436,7 @@ if app_mode == "予想":
 
         # ── 高橋アナ予想パネル ────────────────────────────────────────
         taka = st.session_state.taka or {}
-        st.markdown("#### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
+        st.markdown("### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
 
         if taka.get("available"):
             tenkai = taka.get("tenkai", "")
@@ -1600,7 +1603,7 @@ if app_mode == "予想":
         # ── 選手別決まり手 ────────────────────────────────────────────
         racer_km = st.session_state.racer_km or {}
         if racer_km:
-            st.markdown("#### 🎯 選手別決まり手（コース別）")
+            st.markdown("### 🎯 選手別決まり手（コース別）")
             if True:
                 _KIMARITE_COLORS = {
                     "逃げ": "#e74c3c", "差し": "#3498db", "まくり": "#f1c40f",
@@ -1676,12 +1679,12 @@ if app_mode == "予想":
                         unsafe_allow_html=True,
                     )
         else:
-            st.markdown("#### 🎯 選手別決まり手（コース別）")
+            st.markdown("### 🎯 選手別決まり手（コース別）")
             st.caption("選手別決まり手データを取得できませんでした")
 
         # ── 3連単オッズ一覧表（expander） ──────────────────────────
         if odds:
-            st.markdown("#### 📊 3連単オッズ一覧")
+            st.markdown("### 📊 3連単オッズ一覧")
             if True:
                 _OBG = {
                     "1": "#fff", "2": "#000", "3": "#e74c3c",
@@ -1709,11 +1712,13 @@ if app_mode == "予想":
                     _bg = _OBG[str(_b)]
                     _fg = _OFG[str(_b)]
                     _nm = _rnames.get(str(_b), "")
+                    # 選手名は姓のみ（2文字まで）
+                    _nm_short = _nm.split()[0][:2] if _nm else ""
                     _hdr += (
                         f'<th colspan="3" style="{_CB}background:{_bg};'
-                        f'color:{_fg};padding:3px 2px;font-size:0.65rem;'
+                        f'color:{_fg};padding:2px 1px;font-size:0.58rem;'
                         f'text-align:center;font-weight:bold;'
-                        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0">{_b}.{_nm}</th>'
+                        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0">{_b}{_nm_short}</th>'
                     )
                 _hdr += '</tr>'
 
@@ -1744,8 +1749,8 @@ if app_mode == "予想":
                                     f'<td rowspan="4" style="{_CB}'
                                     f'background:{_bg2};color:{_fg2};'
                                     f'text-align:center;font-weight:bold;'
-                                    f'font-size:0.68rem;padding:1px 2px;'
-                                    f'width:16px;vertical-align:middle">'
+                                    f'font-size:0.6rem;padding:1px 1px;'
+                                    f'width:14px;vertical-align:middle">'
                                     f'{_s}</td>'
                                 )
 
@@ -1755,40 +1760,41 @@ if app_mode == "予想":
                             _tr += (
                                 f'<td style="{_CB}background:{_bg3};'
                                 f'color:{_fg3};text-align:center;'
-                                f'font-weight:bold;font-size:0.68rem;'
-                                f'padding:1px 2px;width:16px">{_t}</td>'
+                                f'font-weight:bold;font-size:0.6rem;'
+                                f'padding:1px 1px;width:14px">{_t}</td>'
                             )
 
                             # オッズセル（1番人気=赤、2番人気=黄、999倍以上=紫で強調）
                             _oval = odds.get(_combo)
                             if _oval is not None:
-                                _ostr = f"{_oval:.1f}"
+                                # 999倍超は全て999表示
+                                _ostr = "999" if _oval > 999 else f"{_oval:.0f}" if _oval >= 100 else f"{_oval:.1f}"
                                 if _oval == _odds_top1:
                                     _ocss = (f'{_CB}background:#fff;'
                                              f'color:#e74c3c;text-align:right;'
-                                             f'font-size:0.65rem;padding:1px 3px;'
+                                             f'font-size:0.58rem;padding:1px 2px;'
                                              f'white-space:nowrap;font-weight:bold')
                                 elif _oval == _odds_top2:
                                     _ocss = (f'{_CB}background:#fff;'
                                              f'color:#f39c12;text-align:right;'
-                                             f'font-size:0.65rem;padding:1px 3px;'
+                                             f'font-size:0.58rem;padding:1px 2px;'
                                              f'white-space:nowrap;font-weight:bold')
                                 elif _oval >= 999:
                                     _ocss = (f'{_CB}background:#fff;'
                                              f'color:#8e44ad;text-align:right;'
-                                             f'font-size:0.65rem;padding:1px 3px;'
+                                             f'font-size:0.58rem;padding:1px 2px;'
                                              f'white-space:nowrap;font-weight:bold')
                                 else:
                                     _ocss = (f'{_CB}background:#fff;'
                                              f'color:#000;text-align:right;'
-                                             f'font-size:0.65rem;padding:1px 3px;'
+                                             f'font-size:0.58rem;padding:1px 2px;'
                                              f'white-space:nowrap')
                                 _tr += f'<td style="{_ocss}">{_ostr}</td>'
                             else:
                                 _tr += (
                                     f'<td style="{_CB}background:#fff;'
                                     f'color:#999;text-align:right;'
-                                    f'font-size:0.65rem;padding:1px 3px">'
+                                    f'font-size:0.58rem;padding:1px 2px">'
                                     f'-</td>'
                                 )
 
@@ -1800,13 +1806,13 @@ if app_mode == "予想":
                     f'table-layout:fixed;background:#fff">{_hdr}{_body}</table>'
                 )
                 st.markdown(
-                    f'<div class="odds-3t-wrap" style="overflow-x:auto;'
+                    f'<div class="odds-3t-wrap" style="overflow-x:hidden;'
                     f'">{_odds_tbl}</div>',
                     unsafe_allow_html=True,
                 )
 
         # ── 艇別パフォーマンスレーダーチャート（expander） ─────────
-        st.markdown("#### 📡 艇別パフォーマンスレーダーチャート")
+        st.markdown("### 📡 艇別パフォーマンスレーダーチャート")
 
         def _make_radar_chart(df_scored: pd.DataFrame) -> go.Figure:
             """scored DataFrameから艇別レーダーチャートを生成する。"""
