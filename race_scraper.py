@@ -191,6 +191,64 @@ def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulS
 
 
 # ─────────────────────────────────────────────
+# 1.5  蒲郡競艇リアルタイム気象データ取得 (IoT API)
+# ─────────────────────────────────────────────
+_GAMAGORI_IOT_URL = "https://vy9ytyar04.execute-api.ap-northeast-1.amazonaws.com/wdsxkey"
+_GAMAGORI_IOT_KEY = "RNMO2YNAgy1drxuUyVnUUaECvRUprycxEbJuL9oe"
+# Wd1m: 0=無風, 1=北北東, 2=北東, ..., 15=北北西, 16=北
+_WD1M_MAP = {
+    0: "-", 1: "北北東", 2: "北東", 3: "東北東", 4: "東",
+    5: "東南東", 6: "南東", 7: "南南東", 8: "南",
+    9: "南南西", 10: "南西", 11: "西南西", 12: "西",
+    13: "西北西", 14: "北西", 15: "北北西", 16: "北",
+}
+
+def fetch_gamagori_weather() -> dict | None:
+    """蒲郡競艇公式サイトのIoT APIからリアルタイム気象データを取得する。
+    失敗時は None を返す。"""
+    try:
+        resp = requests.post(_GAMAGORI_IOT_URL, json={
+            "tablename": "RKS_Iot_DB_Monitor_Short2",
+            "clientid": "devid007",
+            "timeval": "0",
+        }, headers={"x-api-key": _GAMAGORI_IOT_KEY}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        items = data.get("Items", [])
+        if not items:
+            return None
+        m = items[0]
+
+        def _float(key):
+            v = m.get(key)
+            if v is None: return None
+            try: return float(v)
+            except (ValueError, TypeError): return None
+
+        # 1分平均風速・風向
+        wind_speed = _float("Sm1m")
+        wind_dir_num = _float("Wd1m")
+        wind_dir = _WD1M_MAP.get(int(wind_dir_num), "-") if wind_dir_num is not None else "-"
+
+        temp       = _float("Ta")
+        water_temp = _float("Tr")
+        humidity   = _float("Ua")
+        pressure   = _float("Pa")
+
+        return {
+            "風速": f"{wind_speed:.1f}m" if wind_speed is not None else "-",
+            "風向": wind_dir,
+            "気温": f"{temp:.1f}℃" if temp is not None else "-",
+            "水温": f"{water_temp:.1f}℃" if water_temp is not None else "-",
+            "湿度": f"{int(round(humidity))}%" if humidity is not None else "-",
+            "気圧": f"{int(round(pressure))}hPa" if pressure is not None else "-",
+        }
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────
 # 2. 直前情報取得 (風向・展示タイム)
 # ─────────────────────────────────────────────
 def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.DataFrame, dict]:
@@ -199,7 +257,7 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
     params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
 
-    weather = {"天気": "-", "気温": "-", "水温": "-", "風速": "0m", "風向": "-", "波高": "0cm", "安定板": False}
+    weather = {"天気": "-", "気温": "-", "水温": "-", "風速": "-", "風向": "-", "波高": "-", "湿度": "-", "気圧": "-", "安定板": False}
     if not soup: return pd.DataFrame(), weather
 
     # ── 安定板使用検出 ──────────────────────────────
@@ -292,7 +350,14 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
 
         elif "is-wave" in classes:
             # 波高ユニット
-            weather["波高"] = _get_label_data(unit)
+            _wave = _get_label_data(unit)
+            weather["波高"] = _wave if _wave else "-"
+
+    # ── 蒲郡公式リアルタイム気象で上書き ──────────────
+    gw = fetch_gamagori_weather()
+    if gw:
+        for k in ("風速", "風向", "気温", "水温", "湿度", "気圧"):
+            weather[k] = gw[k]
 
     # ── 展示進入コース解析 ──────────────────────────
     # table1_boatImage1 セクションにスタート展示の進入コース順が表示される

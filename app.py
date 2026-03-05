@@ -194,7 +194,7 @@ st.markdown("""
     .odds-tag { display: inline-block; background: #0d3360; border-radius: 4px; padding: 1px 6px; font-size: 0.75rem; color: #7ab8e8; margin-right: 4px; }
 
     /* ── 天気グリッド（モバイル用3x2） ──────────────────── */
-    .weather-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0.5rem 0; }
+    .weather-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0.5rem 0; }
     .weather-item { background: #1a2744; border: 1px solid #2a4a80; border-radius: 8px; padding: 8px 6px; text-align: center; }
     .weather-item .label { color: #7ab8e8; font-size: 0.7rem; margin-bottom: 2px; }
     .weather-item .value { color: #fff; font-size: 1.05rem; font-weight: bold; }
@@ -345,6 +345,8 @@ if app_mode == "予想":
     for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km", "race_result", "lady_racers"):
         if key not in st.session_state:
             st.session_state[key] = None
+    if "odds_last_refresh_time" not in st.session_state:
+        st.session_state.odds_last_refresh_time = 0.0
 
     # ── レース間ナビゲーション（← 前R / 次R →）─────────────────────
     if "nav_race" not in st.session_state:
@@ -369,9 +371,9 @@ if app_mode == "予想":
     # ── セッション喪失時のキャッシュ復元 ─────────────────────────────
     # Google Appなどのインアプリブラウザでセッションが切断された場合、
     # query_paramsのrace番号と日付からキャッシュを復元する
-    if st.session_state.result is None:
+    if st.session_state.result is None and st.session_state.nav_race is None:
         _restore_race = st.query_params.get("race", "1")
-        _restore_date = date.today().strftime("%Y%m%d")
+        _restore_date = st.query_params.get("d") or date.today().strftime("%Y%m%d")
         _cached = _load_result_cache(_restore_race, _restore_date, _device_id)
         if _cached:
             st.session_state.result      = _cached["result"]
@@ -401,7 +403,19 @@ if app_mode == "予想":
     if _hide_settings:
         # 予想実行中 or 予想後で設定非表示: トグルボタンだけ表示
         with _settings_ph.container():
-            if not st.session_state.running:
+            if st.session_state.running:
+                _run_rno = st.session_state.get("_exec_race_no") or st.session_state.get("radio_race_no", 1)
+                _run_date = st.session_state.get("_exec_race_date") or date.today()
+                _run_date_str = _run_date.strftime("%Y年%m月%d日") if hasattr(_run_date, "strftime") else str(_run_date)
+                st.markdown(
+                    f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                    f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
+                    f'<span style="color:#7ab8e8;font-size:0.85rem">'
+                    f'📡 {_run_date_str} <b>{_run_rno}R</b> の予想を実行中…</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
                 st.button("▸ レース設定を開く", use_container_width=True,
                           on_click=lambda: st.session_state.update(show_settings=True))
         race_no = None
@@ -450,11 +464,15 @@ if app_mode == "予想":
             else:
                 _default_date = date.today()
             race_date = st.date_input("開催日", _default_date, disabled=_ui_disabled)
+            _d_val = race_date.strftime("%Y%m%d")
+            if _d_val != st.query_params.get("d"):
+                st.query_params["d"] = _d_val
             def _on_fetch_click():
                 st.session_state.running = True
                 st.session_state.show_settings = False
                 st.session_state._exec_race_no = race_no
                 st.session_state._exec_race_date = race_date
+                st.session_state.result = None  # 旧結果をクリア（設定パネル即折りたたみ）
             fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True, disabled=_ui_disabled,
                                    on_click=_on_fetch_click)
 
@@ -462,10 +480,26 @@ if app_mode == "予想":
     _nav_auto = False
     if st.session_state.nav_race is not None:
         race_no = st.session_state.nav_race
-        race_date = date.today()
+        # 日付復元: _exec_race_date → date_str → query_params → today
+        _nav_date = st.session_state.get("_exec_race_date")
+        if _nav_date is None and st.session_state.get("date_str"):
+            try:
+                _nav_date = datetime.strptime(st.session_state.date_str, "%Y%m%d").date()
+            except (ValueError, TypeError):
+                _nav_date = None
+        if _nav_date is None:
+            _d_qp = st.query_params.get("d")
+            if _d_qp:
+                try:
+                    _nav_date = datetime.strptime(_d_qp, "%Y%m%d").date()
+                except ValueError:
+                    _nav_date = None
+        race_date = _nav_date or date.today()
         st.session_state.nav_race = None
         st.session_state.radio_race_no = race_no
+        st.session_state._exec_race_date = race_date
         st.query_params["race"] = str(race_no)
+        st.query_params["d"] = race_date.strftime("%Y%m%d")
         _nav_auto = True
 
     # running フラグが立っている場合（設定パネルが非表示でも）予想を実行
@@ -476,9 +510,26 @@ if app_mode == "予想":
         _run_from_state = True
 
     if fetch_btn or _nav_auto or _run_from_state:
-        # 設定パネルを即座に折りたたむ（描画済みのプレースホルダーをクリアして再描画）
+        # 設定パネルを即座に折りたたむ → 実行中表示に差し替え
         _settings_ph.empty()
         d_str = race_date.strftime("%Y%m%d")
+        _run_date_fmt = race_date.strftime("%Y年%m月%d日") if hasattr(race_date, "strftime") else str(race_date)
+        with _settings_ph.container():
+            st.markdown(
+                f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
+                f'<span style="color:#7ab8e8;font-size:0.85rem">'
+                f'📡 {_run_date_fmt} <b>{race_no}R</b> の予想を実行中…</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # UI折りたたみをブラウザに反映してから予想を開始する
+        if not st.session_state.get("_ui_flushed"):
+            st.session_state._ui_flushed = True
+            st.rerun()
+        st.session_state.pop("_ui_flushed", None)
+
         progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
@@ -560,6 +611,7 @@ if app_mode == "予想":
                     taka_data=taka, odds_dict=odds,
                     odds_2t=odds_2t,
                     racer_kimarite=racer_km,
+                    deadline=deadline,
                 )
             except Exception as e:
                 progress_bar.progress(100, text="❌ 予想計算エラー")
@@ -594,8 +646,10 @@ if app_mode == "予想":
                 pass  # 保存失敗しても予想表示は続行
 
             progress_bar.progress(100, text="✅ 予想完了！")
-            time.sleep(0.5)
             progress_bar.empty()
+
+            # オッズ自動更新のタイマーをリセット（リラン直後の再取得を防止）
+            st.session_state.odds_last_refresh_time = time.time()
 
             # 結果をファイルキャッシュに保存（セッション切断対策）
             _save_result_cache(
@@ -623,6 +677,7 @@ if app_mode == "予想":
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
     if st.session_state.running:
         st.session_state.running = False
+    st.session_state.pop("_ui_flushed", None)
 
     # ── 結果表示 ─────────────────────────────────────────────────────
     if st.session_state.result is not None:
@@ -759,11 +814,13 @@ if app_mode == "予想":
             )
             weather_items = [
                 ("天気", w.get("天気", "-")),
+                ("波高", w.get("波高", "0cm")),
+                ("風向", w.get("風向", "-")),
+                ("風速", w.get("風速", "0m")),
                 ("気温", w.get("気温", "-")),
                 ("水温", w.get("水温", "-")),
-                ("風速", w.get("風速", "0m")),
-                ("風向", w.get("風向", "-")),
-                ("波高", w.get("波高", "0cm")),
+                ("湿度", w.get("湿度", "-")),
+                ("気圧", w.get("気圧", "-")),
             ]
             weather_html = '<div class="weather-grid">'
             for lbl, val in weather_items:
@@ -774,6 +831,14 @@ if app_mode == "予想":
                     f'</div>'
                 )
             weather_html += '</div>'
+            # 気象情報の注釈
+            _note_style = 'color:#7ab8e8;font-size:0.7rem;margin-top:2px;'
+            weather_html += f'<div style="{_note_style}">※天気・波高以外はリアルタイム情報</div>'
+            if _dl_dt:
+                _now_jst = datetime.now(_JST)
+                _diff_sec = abs((_dl_dt - _now_jst).total_seconds())
+                if _diff_sec > 3600:
+                    weather_html += '<div style="color:#ff6e6e;font-size:0.75rem;margin-top:2px;font-weight:bold;">※締め切り前後1時間外のため気象条件は予想に含めていません</div>'
             # 安定板使用バッジ / 展示進入変化バッジ
             _badges_html = ""
             if w.get("安定板"):
@@ -944,43 +1009,53 @@ if app_mode == "予想":
                 f'</div>',
                 unsafe_allow_html=True,
             )
+            st.markdown("---")
 
         # ── 3連単 全組番テーブル（確率順）【メイン予想 - 最上部表示】──
-        _3t_hdr_col1, _3t_hdr_col2 = st.columns([3, 1])
-        with _3t_hdr_col1:
-            st.markdown("### 🎯 3連単 予想")
-        with _3t_hdr_col2:
-            _odds_refresh = st.button("🔄 オッズ更新", use_container_width=True)
 
-        # オッズ更新処理（予想は再計算せず、オッズと期待値だけ再取得）
-        if _odds_refresh and st.session_state.race_no and st.session_state.date_str:
-            _ref_rno = st.session_state.race_no
-            _ref_dstr = st.session_state.date_str
-            with st.spinner("オッズを更新中..."):
-                _new_odds = fetch_odds_3t(_ref_rno, _ref_dstr)
-            if _new_odds:
-                st.session_state.odds = _new_odds
-                odds = _new_odds
-                # all_3t_candidates の期待値を再計算
-                _updated_3t = res.get("all_3t_candidates", [])
-                for _c in _updated_3t:
-                    _combo_key = _c["買い目"]
-                    _actual = _new_odds.get(_combo_key)
-                    _c["実オッズ"] = _actual
-                    if _actual is not None and _c["的中確率"] > 0:
-                        _c["期待値"] = (_c["的中確率"] / 100) * _actual
-                    else:
-                        _c["期待値"] = None
-                res["all_3t_candidates"] = _updated_3t
-                st.session_state.result = res
-                st.toast("オッズを更新しました")
-            else:
-                st.warning("オッズの取得に失敗しました")
+        @st.fragment
+        def _render_3t_section():
+            """3連単予想セクション（オッズ更新時はここだけ再描画）"""
+            _hdr_col1, _hdr_col2 = st.columns([3, 1])
+            with _hdr_col1:
+                _lr_text = ""
+                if st.session_state.odds_last_refresh_time > 0:
+                    _lr = datetime.fromtimestamp(st.session_state.odds_last_refresh_time)
+                    _lr_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr.strftime("%H:%M:%S")}</span>'
+                st.markdown(f"### 🎯 3連単 予想{_lr_text}", unsafe_allow_html=True)
+            with _hdr_col2:
+                if st.session_state.race_no and st.session_state.date_str:
+                    if st.button("オッズ更新", key="odds_refresh_btn", use_container_width=True):
+                        _ar_rno = st.session_state.race_no
+                        _ar_dstr = st.session_state.date_str
+                        _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr)
+                        if _ar_odds:
+                            st.session_state.odds = _ar_odds
+                            _ar_3t = st.session_state.result.get("all_3t_candidates", [])
+                            for _c in _ar_3t:
+                                _actual = _ar_odds.get(_c["買い目"])
+                                _c["実オッズ"] = _actual
+                                if _actual is not None and _c["的中確率"] > 0:
+                                    _c["期待値"] = (_c["的中確率"] / 100) * _actual
+                                else:
+                                    _c["期待値"] = None
+                            st.session_state.result["all_3t_candidates"] = _ar_3t
+                            for _rec in st.session_state.result.get("recommendations", []):
+                                _rec_key = _rec.get("買い目", "")
+                                _rec_actual = _ar_odds.get(_rec_key)
+                                _rec["実オッズ"] = _rec_actual
+                                if _rec_actual is not None and _rec.get("的中確率", 0) > 0:
+                                    _rec["期待値"] = (_rec["的中確率"] / 100) * _rec_actual
+                                else:
+                                    _rec["期待値"] = None
+                            st.session_state.odds_last_refresh_time = time.time()
 
-        all_3t = res.get("all_3t_candidates", [])
-        if not all_3t:
-            st.warning("買い目候補がありません")
-        else:
+            all_3t = st.session_state.result.get("all_3t_candidates", [])
+            odds = st.session_state.odds or {}
+
+            if not all_3t:
+                st.warning("買い目候補がありません")
+                return
             # レース結果の3連単組番を取得（的中マーク用）
             _rr = st.session_state.race_result
             _result_combo_3t = ""
@@ -990,15 +1065,15 @@ if app_mode == "予想":
             def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
                 """3連単テーブルのHTML文字列を生成する。"""
                 _th_style = ('background:#0d2855;color:#7ab8e8;padding:4px 3px;'
-                             'font-size:0.7rem;border-bottom:2px solid #1e5fa8;white-space:nowrap')
+                             'font-size:0.7rem;border-bottom:2px solid #1e5fa8;white-space:nowrap;text-align:center')
                 hdr = (
                     f'<tr>'
-                    f'<th style="{_th_style};text-align:center;width:24px">#</th>'
-                    f'<th style="{_th_style};text-align:center;width:28%">組番</th>'
-                    f'<th style="{_th_style};text-align:right">確率</th>'
-                    f'<th style="{_th_style};text-align:right">実ｵｯｽﾞ</th>'
-                    f'<th style="{_th_style};text-align:right">公正ｵｯｽﾞ</th>'
-                    f'<th style="{_th_style};text-align:right">期待値</th>'
+                    f'<th style="{_th_style};width:24px">#</th>'
+                    f'<th style="{_th_style};width:28%">組番</th>'
+                    f'<th style="{_th_style}">確率</th>'
+                    f'<th style="{_th_style}">実ｵｯｽﾞ</th>'
+                    f'<th style="{_th_style}">公正ｵｯｽﾞ</th>'
+                    f'<th style="{_th_style}">期待値</th>'
                     f'</tr>'
                 )
                 body = ""
@@ -1118,6 +1193,8 @@ if app_mode == "予想":
             if rest:
                 with st.expander(f"▼ 残り {len(rest)} 件を表示"):
                     st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
+
+        _render_3t_section()
 
         st.markdown("---")
 
@@ -1713,9 +1790,47 @@ if app_mode == "予想":
 
         # ── 3連単オッズ一覧表（expander） ──────────────────────────
         st.markdown("---")
-        if odds:
-            st.markdown("### 📊 3連単オッズ一覧")
-            if True:
+
+        @st.fragment
+        def _render_odds_section():
+            """3連単オッズ一覧セクション（オッズ更新時はここだけ再描画）"""
+            _odds_cur = st.session_state.odds or {}
+            if _odds_cur:
+                _hdr_col1, _hdr_col2 = st.columns([3, 1])
+                with _hdr_col1:
+                    _lr2_text = ""
+                    if st.session_state.odds_last_refresh_time > 0:
+                        _lr2 = datetime.fromtimestamp(st.session_state.odds_last_refresh_time)
+                        _lr2_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr2.strftime("%H:%M:%S")}</span>'
+                    st.markdown(f"### 📊 3連単オッズ一覧{_lr2_text}", unsafe_allow_html=True)
+                with _hdr_col2:
+                    if st.session_state.race_no and st.session_state.date_str:
+                        if st.button("オッズ更新", key="odds_refresh_btn2", use_container_width=True):
+                            _ar_rno = st.session_state.race_no
+                            _ar_dstr = st.session_state.date_str
+                            _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr)
+                            if _ar_odds:
+                                st.session_state.odds = _ar_odds
+                                _odds_cur = _ar_odds
+                                _ar_3t = st.session_state.result.get("all_3t_candidates", [])
+                                for _c in _ar_3t:
+                                    _actual = _ar_odds.get(_c["買い目"])
+                                    _c["実オッズ"] = _actual
+                                    if _actual is not None and _c["的中確率"] > 0:
+                                        _c["期待値"] = (_c["的中確率"] / 100) * _actual
+                                    else:
+                                        _c["期待値"] = None
+                                st.session_state.result["all_3t_candidates"] = _ar_3t
+                                for _rec in st.session_state.result.get("recommendations", []):
+                                    _rec_key = _rec.get("買い目", "")
+                                    _rec_actual = _ar_odds.get(_rec_key)
+                                    _rec["実オッズ"] = _rec_actual
+                                    if _rec_actual is not None and _rec.get("的中確率", 0) > 0:
+                                        _rec["期待値"] = (_rec["的中確率"] / 100) * _rec_actual
+                                    else:
+                                        _rec["期待値"] = None
+                                st.session_state.odds_last_refresh_time = time.time()
+                odds = _odds_cur
                 _OBG = {
                     "1": "#fff", "2": "#000", "3": "#e74c3c",
                     "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
@@ -1841,6 +1956,12 @@ if app_mode == "予想":
                     unsafe_allow_html=True,
                 )
 
+            else:
+                st.markdown("### 📊 3連単オッズ一覧")
+                st.info("3連単オッズはまだ公開されていません。締切が近づくと表示されます。")
+
+        _render_odds_section()
+
         # ── 艇別パフォーマンスレーダーチャート（expander） ─────────
         st.markdown("---")
         st.markdown("### 📡 艇別パフォーマンスレーダーチャート")
@@ -1938,6 +2059,7 @@ if app_mode == "予想":
         else:
             st.caption("レーダーチャートを表示するのに十分なデータがありません")
 
+        st.markdown("---")
         # ── 予想パラメータ一覧 ────────────────────────────────────────
         with st.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
             from config import SCORE_WEIGHTS as _W, GAMAGORI_SETTINGS as _G
@@ -2010,6 +2132,7 @@ if app_mode == "予想":
                         unsafe_allow_html=True,
                     )
 
+
 else:
     # ══════════════════════════════════════════════════════════════
     #  出走表一覧モード
@@ -2031,26 +2154,51 @@ else:
         6: ("#20a040", "#fff"), # 緑
     }
 
-    st.markdown(
-        '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
-        'padding:0.8rem 1rem;margin-bottom:0.5rem">'
-        '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">出走表一覧</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    _shutsusou_settings_ph = st.empty()
 
-    _d_param_s = st.query_params.get("d")
-    if _d_param_s:
-        try:
-            _default_date_s = datetime.strptime(_d_param_s, "%Y%m%d").date()
-        except ValueError:
-            _default_date_s = date.today()
+    _hide_shutsusou_settings = st.session_state.running and st.session_state.shutsusou_data is None
+
+    if _hide_shutsusou_settings:
+        with _shutsusou_settings_ph.container():
+            _s_run_date = st.session_state.get("_exec_shutsusou_date")
+            _s_date_str = _s_run_date.strftime("%Y年%m月%d日") if _s_run_date and hasattr(_s_run_date, "strftime") else ""
+            st.markdown(
+                f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
+                f'<span style="color:#7ab8e8;font-size:0.85rem">'
+                f'📡 {_s_date_str} の出走表一覧を取得中…</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        shutsusou_date = _s_run_date
+        fetch_shutsusou = False
     else:
-        _default_date_s = date.today()
+        with _shutsusou_settings_ph.container():
+            st.markdown(
+                '<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                'padding:0.8rem 1rem;margin-bottom:0.5rem">'
+                '<span style="color:#7ab8e8;font-size:0.9rem;font-weight:bold">出走表一覧</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
-    shutsusou_date = st.date_input("開催日", _default_date_s, key="shutsusou_date_input", disabled=_ui_disabled)
-    fetch_shutsusou = st.button("▶ 出走表を取得", type="primary", use_container_width=True, disabled=_ui_disabled,
-                                on_click=lambda: st.session_state.update(running=True))
+            _d_param_s = st.query_params.get("d")
+            if _d_param_s:
+                try:
+                    _default_date_s = datetime.strptime(_d_param_s, "%Y%m%d").date()
+                except ValueError:
+                    _default_date_s = date.today()
+            else:
+                _default_date_s = date.today()
+
+            shutsusou_date = st.date_input("開催日", _default_date_s, key="shutsusou_date_input", disabled=_ui_disabled)
+
+            def _on_shutsusou_click():
+                st.session_state.running = True
+                st.session_state._exec_shutsusou_date = shutsusou_date
+
+            fetch_shutsusou = st.button("▶ 出走表を取得", type="primary", use_container_width=True, disabled=_ui_disabled,
+                                        on_click=_on_shutsusou_click)
 
     if fetch_shutsusou:
         d_str_s = shutsusou_date.strftime("%Y%m%d")
@@ -2088,6 +2236,7 @@ else:
         st.session_state.shutsusou_data = all_race_data
         st.session_state.shutsusou_date = d_str_s
         st.session_state.running = False
+        st.session_state.pop("_exec_shutsusou_date", None)
         st.rerun()
 
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────

@@ -13,12 +13,36 @@
 9. 2連単・2連複推奨買い目の生成
 """
 import re
+from datetime import datetime, timedelta
 from itertools import permutations
 
 import numpy as np
 import pandas as pd
 
 from config import GAMAGORI_SETTINGS as G, SCORE_WEIGHTS as W
+
+
+def _is_weather_reliable(deadline: str | None) -> bool:
+    """締め切り時刻の前後1時間以内なら気象データを信頼して予想に反映する。"""
+    if not deadline or deadline == "-":
+        return False
+    try:
+        now = datetime.now()
+        hh, mm = map(int, deadline.split(":"))
+        dl_time = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return abs((now - dl_time).total_seconds()) <= 3600
+    except (ValueError, TypeError):
+        return False
+
+
+def _neutralize_weather(weather: dict) -> dict:
+    """気象データが信頼できない場合、予想に影響しないニュートラルな値にする。"""
+    neutral = dict(weather)
+    neutral["風速"] = "0m"
+    neutral["風向"] = "-"
+    neutral["波高"] = "0cm"
+    neutral["水温"] = "15℃"
+    return neutral
 
 
 # ────────────────────────────────────────────────────────────────
@@ -68,23 +92,26 @@ def _safe_col(df, col):
 
 GAMAGORI_COURSE_WIN_RATE = [0.555, 0.095, 0.115, 0.095, 0.085, 0.055]
 
+# 蒲郡の地理: 南西の風=向かい風, 北東の風=追い風
+# セオリー: 向かい風→1マークで減速→まくり決まりやすい→ダッシュ有利
+#           追い風→スピード出る→先マイしやすい→イン有利
 WIND_COURSE_EFFECT = {
-    "北":     {0: +2.5, 1: +1.0, 2: -0.5, 3: -1.0, 4: -1.5, 5: -2.0},
-    "北北東":  {0: +2.0, 1: +0.8, 2: -0.3, 3: -0.8, 4: -1.2, 5: -1.8},
-    "北東":   {0: +1.5, 1: +0.5, 2:  0.0, 3: -0.5, 4: -1.0, 5: -1.5},
-    "東北東":  {0: +1.0, 1: +0.3, 2: +0.5, 3:  0.0, 4: -0.5, 5: -1.0},
-    "東":     {0:  0.0, 1: -0.5, 2: +1.0, 3: +1.5, 4: +0.5, 5: -0.5},
-    "東南東":  {0: -0.5, 1: -0.5, 2: +0.8, 3: +1.5, 4: +0.8, 5:  0.0},
-    "南東":   {0: -1.0, 1: -0.5, 2: +0.5, 3: +1.5, 4: +1.0, 5: +0.5},
-    "南南東":  {0: -1.5, 1: -0.5, 2: +0.5, 3: +1.5, 4: +1.2, 5: +0.8},
-    "南":     {0: -2.0, 1: -0.5, 2: +0.5, 3: +1.0, 4: +1.5, 5: +1.0},
-    "南南西":  {0: -1.5, 1: -0.3, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.0},
-    "南西":   {0: -1.0, 1:  0.0, 2: +0.3, 3: +0.5, 4: +0.8, 5: +0.8},
-    "西南西":  {0: -0.5, 1: +0.5, 2: +0.5, 3: +0.3, 4: +0.5, 5: +0.5},
-    "西":     {0:  0.0, 1: +1.0, 2: +0.8, 3:  0.0, 4:  0.0, 5:  0.0},
-    "西北西":  {0: +0.5, 1: +1.0, 2: +0.5, 3: -0.3, 4: -0.3, 5: -0.5},
-    "北西":   {0: +1.0, 1: +1.0, 2:  0.0, 3: -0.5, 4: -0.8, 5: -1.0},
-    "北北西":  {0: +2.0, 1: +0.8, 2: -0.3, 3: -0.8, 4: -1.2, 5: -1.5},
+    "北":     {0: +2.0, 1: +0.5, 2: -0.5, 3: -1.0, 4: -1.5, 5: -1.0},
+    "北北東":  {0: +1.5, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.2, 5: -0.8},
+    "北東":   {0: +1.0, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.0, 5: -0.5},
+    "東北東":  {0: +0.5, 1: +0.5, 2: -0.8, 3: -1.5, 4: -0.8, 5:  0.0},
+    "東":     {0:  0.0, 1: +0.5, 2: -1.0, 3: -1.5, 4: -0.5, 5: +0.5},
+    "東南東":  {0: -0.5, 1: -0.3, 2: -0.5, 3:  0.0, 4: +0.5, 5: +1.0},
+    "南東":   {0: -1.0, 1: -0.5, 2:  0.0, 3: +0.5, 4: +1.0, 5: +1.5},
+    "南南東":  {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.8},
+    "南":     {0: -2.0, 1: -1.0, 2: +0.5, 3: +1.0, 4: +1.5, 5: +2.0},
+    "南南西":  {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.5},
+    "南西":   {0: -1.0, 1: -0.5, 2:  0.0, 3: +0.5, 4: +1.0, 5: +1.5},
+    "西南西":  {0: -0.5, 1: -0.3, 2: -0.5, 3:  0.0, 4: +0.5, 5: +1.0},
+    "西":     {0:  0.0, 1: -1.0, 2: -0.8, 3:  0.0, 4:  0.0, 5:  0.0},
+    "西北西":  {0: +0.5, 1: -1.0, 2: -0.5, 3: -0.3, 4: -0.5, 5: -0.5},
+    "北西":   {0: +1.0, 1:  0.0, 2: -0.3, 3: -0.5, 4: -0.8, 5: -0.8},
+    "北北西":  {0: +1.5, 1: +0.3, 2: -0.3, 3: -0.8, 4: -1.2, 5: -1.0},
     "-":      {0:  0.0, 1:  0.0, 2:  0.0, 3:  0.0, 4:  0.0, 5:  0.0},
 }
 
@@ -560,6 +587,17 @@ def calculate_scores(
     combined = course_probs * ind_prob
     probs = (combined / combined.sum()) * 100.0
 
+    # 確率キャップ: 1着確率の上限を制限し、超過分を他艇に再分配
+    prob_cap = W.get("prob_cap", 70.0)
+    if probs.max() > prob_cap:
+        excess = probs.max() - prob_cap
+        top_idx = int(np.argmax(probs))
+        others_sum = probs.sum() - probs[top_idx]
+        probs[top_idx] = prob_cap
+        if others_sum > 0:
+            probs[:top_idx] += probs[:top_idx] / others_sum * excess
+            probs[top_idx+1:] += probs[top_idx+1:] / others_sum * excess
+
     # ── 信頼度スコア計算 ─────────────────────────────────────────
     top_prob = probs.max()
     confidence = _calc_confidence(
@@ -691,17 +729,17 @@ def _build_reasons(
         if ci == 0:
             if is_calm:
                 r.append("無風→イン安定")
-            elif wind_dir in ["北", "北北東", "北東"] and wind_speed >= 2:
-                r.append(f"向い風({wind_speed}m)→逃げ有利")
-            elif wind_dir in ["南", "南南東", "南東"] and wind_speed >= 3:
-                r.append(f"追い風({wind_speed}m)→イン注意")
+            elif wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
+                r.append(f"向い風({wind_speed}m)→まくり注意")
+            elif wind_dir in ["北", "北北東", "北東", "北北西", "北西"] and wind_speed >= 2:
+                r.append(f"追い風({wind_speed}m)→逃げ有利")
             if is_night:
                 r.append("ナイター→イン補正")
 
-        if ci == 1 and wind_dir in ["西", "西北西", "北西"] and wind_speed >= 2:
+        if ci == 1 and wind_dir in ["東", "東南東", "東北東"] and wind_speed >= 2:
             r.append(f"横風({wind_dir})→差し有利")
 
-        if ci in [2, 3] and wind_dir in ["東", "東南東", "南東", "南", "南南西"] and wind_speed >= 2:
+        if ci in [2, 3] and wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
             r.append(f"{'まくり差し' if ci==2 else 'カドまくり'}条件")
 
         # 展示タイム
@@ -1257,7 +1295,7 @@ def generate_tenkai_prediction(
                 if st_vals[c1_idx] > mean_st + 0.01:
                     sashi_score *= 1.2
             # 横風→コース2差し有利
-            if cp == 1 and wind_dir in ["西", "西北西", "北西"] and wind_speed >= 2:
+            if cp == 1 and wind_dir in ["東", "東南東", "東北東"] and wind_speed >= 2:
                 sashi_score *= 1.15
 
             if sashi_score > 0.02:
@@ -1285,7 +1323,7 @@ def generate_tenkai_prediction(
                     makuri_score *= 1.2
             if tilts[idx] < -0.5:
                 makuri_score *= 1.15
-            if wind_dir in ["南", "南南東", "南東", "東", "東南東"] and wind_speed >= 2:
+            if wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
                 makuri_score *= 1.1
             if cp == 3:  # カドまくり
                 makuri_score *= 1.2
@@ -1465,8 +1503,13 @@ def predict(
     odds_dict: dict | None = None,
     odds_2t: dict | None = None,
     racer_kimarite: dict | None = None,
+    deadline: str | None = None,
 ) -> dict:
-    scored = calculate_scores(df, weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
+    # 締め切り前後1時間以内でなければ気象条件をニュートラル化
+    weather_reliable = _is_weather_reliable(deadline)
+    scoring_weather = weather if weather_reliable else _neutralize_weather(weather)
+
+    scored = calculate_scores(df, scoring_weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
 
     # 【v6】進入コース情報を取得し、決まり手連動補正に渡す
     course_positions = scored["_course_pos"].tolist() if "_course_pos" in scored.columns else None
@@ -1484,7 +1527,7 @@ def predict(
 
     # 【v10】展開予想シナリオ生成
     tenkai_scenarios = generate_tenkai_prediction(
-        scored, weather,
+        scored, scoring_weather,
         racer_kimarite=racer_kimarite,
         race_no=race_no,
     )
@@ -1495,11 +1538,13 @@ def predict(
     confidence = scored["confidence"].iloc[0] if "confidence" in scored.columns else "-"
     grade      = weather.get("grade", "一般")
 
+    weather_note = "" if weather_reliable else "⏰ 気象データ未反映（締切1時間以上前）"
     is_stabilizer = weather.get("安定板", False)
     summary_lines = [
         f"📍 蒲郡 {race_no}R 予想サマリ",
         f"🏆 グレード: {grade}" + (" / 優勝戦" if weather.get("is_final") else ""),
-        f"💨 風速: {weather.get('風速','?')} / 風向: {weather.get('風向','?')} / 天気: {weather.get('天気','?')}",
+        f"💨 風速: {weather.get('風速','?')} / 風向: {weather.get('風向','?')} / 天気: {weather.get('天気','?')}"
+        + (f"  ({weather_note})" if weather_note else ""),
         f"🌡 気温: {weather.get('気温','?')} / 水温: {weather.get('水温','?')} / 波高: {weather.get('波高','?')}",
         f"{'🌙 ナイターレース' if is_night else '☀️ デイレース'}"
         + (" / ⚠️ 安定板使用（イン有利・展示信頼性低下）" if is_stabilizer else ""),
