@@ -293,17 +293,28 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             # 波高ユニット
             weather["波高"] = _get_label_data(unit)
 
+    # ── 展示進入コース解析 ──────────────────────────
+    # table1_boatImage1 セクションにスタート展示の進入コース順が表示される
+    # 上から順にコース1, コース2, ... コース6
+    # 各div内の table1_boatImage1Number に枠番が記載
+    course_map = {}  # {枠番文字列: 進入コース番号}
+    boat_divs = soup.find_all("div", class_="table1_boatImage1")
+    for course_idx, div in enumerate(boat_divs, start=1):
+        num_span = div.find("span", class_=re.compile(r"table1_boatImage1Number"))
+        if num_span:
+            f_no = num_span.get_text(strip=True)
+            if f_no in ["1", "2", "3", "4", "5", "6"]:
+                course_map[f_no] = course_idx
+
     # ── 展示タイム解析 ───────────────────────────
-    # テーブルの行順 = 進入コース順（1行目=1コース、2行目=2コース…）
+    # テーブルの行順 = 枠番順（1号艇、2号艇、...）
     # 実際のtd構造（データ行 10セル）:
     #   [0]枠番 [1]写真 [2]選手名 [3]体重 [4]展示タイム [5]チルト
     #   [6]プロペラ [7]部品交換 [8]前走成績 [9](空)
-    # ※ boatrace.jp に周回展示タイムの列は存在しない
     rows = []
     tables = soup.find_all("table")
     for tbl in tables:
         if "展示タイム" in tbl.get_text():
-            course_idx = 0  # 進入コース番号（1始まり）
             for tr in tbl.find_all("tr"):
                 tds = tr.find_all("td")
                 if len(tds) >= 6:
@@ -312,13 +323,12 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
                     et = _to_float(tds[4].get_text())
                     tilt = _to_float(tds[5].get_text())
                     if f_no in ["1", "2", "3", "4", "5", "6"]:
-                        course_idx += 1
                         rows.append({
                             "枠番":       f_no,
                             "体重":       weight,
                             "展示タイム":  et,
                             "チルト":     tilt,
-                            "進入コース":  course_idx,
+                            "進入コース":  course_map.get(f_no, int(f_no)),
                             "周回タイム":  None,
                         })
             break

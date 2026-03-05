@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -482,23 +482,25 @@ if st.session_state.result is not None:
     _date_fmt = f"{_dstr[:4]}/{_dstr[4:6]}/{_dstr[6:]}" if len(_dstr) == 8 else _dstr
     _dl_time = st.session_state.deadline or "-"
 
-    # カウントダウン用: 締切のISO文字列を生成（レース日付を使用）
-    _dl_iso = ""
+    # カウントダウン用: 締切のJST日時を生成（レース日付を使用）
+    _JST = timezone(timedelta(hours=9))
+    _dl_dt = None
     if _dl_time != "-" and len(_dstr) == 8:
         try:
             _race_date = f"{_dstr[:4]}-{_dstr[4:6]}-{_dstr[6:]}"
-            _dl_iso = datetime.strptime(
+            _dl_dt = datetime.strptime(
                 f"{_race_date} {_dl_time}", "%Y-%m-%d %H:%M"
-            ).isoformat()
+            ).replace(tzinfo=_JST)
         except Exception:
             pass
 
-    # 締め切り判定
+    # 締め切り判定（JSTで比較）
     _is_past_deadline = False
-    if _dl_iso:
+    _remain_sec = 0
+    if _dl_dt:
         try:
-            _dl_dt = datetime.fromisoformat(_dl_iso)
-            _remain = _dl_dt - datetime.now()
+            _now_jst = datetime.now(_JST)
+            _remain = _dl_dt - _now_jst
             _remain_sec = int(_remain.total_seconds())
             _is_past_deadline = _remain_sec <= 0
         except Exception:
@@ -529,7 +531,7 @@ if st.session_state.result is not None:
         unsafe_allow_html=True,
     )
     # カウントダウン（静的テキスト表示 - iOS互換性のためiframeを廃止）
-    if _dl_iso and not _is_past_deadline:
+    if _dl_dt and not _is_past_deadline:
         try:
             _rm = _remain_sec // 60
             _rs = _remain_sec % 60
