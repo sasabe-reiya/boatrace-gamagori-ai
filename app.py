@@ -450,8 +450,13 @@ if app_mode == "予想":
             else:
                 _default_date = date.today()
             race_date = st.date_input("開催日", _default_date, disabled=_ui_disabled)
+            def _on_fetch_click():
+                st.session_state.running = True
+                st.session_state.show_settings = False
+                st.session_state._exec_race_no = race_no
+                st.session_state._exec_race_date = race_date
             fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True, disabled=_ui_disabled,
-                                   on_click=lambda: st.session_state.update(running=True, show_settings=False))
+                                   on_click=_on_fetch_click)
 
     # ── 予想実行（ナビゲーション経由の自動実行を含む）───────────────
     _nav_auto = False
@@ -463,7 +468,16 @@ if app_mode == "予想":
         st.query_params["race"] = str(race_no)
         _nav_auto = True
 
-    if fetch_btn or _nav_auto:
+    # running フラグが立っている場合（設定パネルが非表示でも）予想を実行
+    _run_from_state = False
+    if st.session_state.running and not fetch_btn and not _nav_auto:
+        race_no = st.session_state.get("_exec_race_no") or st.session_state.get("radio_race_no", 1)
+        race_date = st.session_state.get("_exec_race_date") or date.today()
+        _run_from_state = True
+
+    if fetch_btn or _nav_auto or _run_from_state:
+        # 設定パネルを即座に折りたたむ（描画済みのプレースホルダーをクリアして再描画）
+        _settings_ph.empty()
         d_str = race_date.strftime("%Y%m%d")
         progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
 
@@ -552,6 +566,8 @@ if app_mode == "予想":
                 time.sleep(1)
                 progress_bar.empty()
                 st.session_state.running = False
+                st.session_state.pop("_exec_race_no", None)
+                st.session_state.pop("_exec_race_date", None)
                 st.error(f"予想計算中にエラーが発生しました: {e}")
                 st.stop()
 
@@ -591,6 +607,8 @@ if app_mode == "予想":
             # 設定パネルをたたんで再描画
             st.session_state.show_settings = False
             st.session_state.running = False
+            st.session_state.pop("_exec_race_no", None)
+            st.session_state.pop("_exec_race_date", None)
             st.rerun()
 
         else:
@@ -598,6 +616,8 @@ if app_mode == "予想":
             time.sleep(1)
             progress_bar.empty()
             st.session_state.running = False
+            st.session_state.pop("_exec_race_no", None)
+            st.session_state.pop("_exec_race_date", None)
             st.error("データが取得できませんでした。開催時間外の可能性があります。")
 
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
