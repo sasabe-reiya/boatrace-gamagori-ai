@@ -1241,7 +1241,8 @@ def generate_tenkai_prediction(
         frame = frames[idx]
         name = str(names[idx]).split()[0] if names[idx] else ""
         rk = (racer_kimarite or {}).get(frame, {})
-        boat_wp = win_probs[idx] / 100.0
+        _wp_raw = win_probs[idx]
+        boat_wp = 0.0 if (np.isnan(_wp_raw) if isinstance(_wp_raw, float) else False) else _wp_raw / 100.0
 
         # ── 差し ──
         if cp in [1, 2, 3]:  # コース2,3,4
@@ -1328,6 +1329,46 @@ def generate_tenkai_prediction(
 
     # ── 全シナリオ統合・正規化 ────────────────────────────────────
     c1_name = str(names[c1_idx]).split()[0] if names[c1_idx] else ""
+
+    # attack_scenarios が空の場合、閾値なしで全候補から最良を選ぶ
+    if not attack_scenarios:
+        _all_candidates = []
+        for cp in range(1, 6):
+            idx = course_to_idx.get(cp)
+            if idx is None:
+                continue
+            frame = frames[idx]
+            name = str(names[idx]).split()[0] if names[idx] else ""
+            rk = (racer_kimarite or {}).get(frame, {})
+            _wp = win_probs[idx]
+            boat_wp = 0.0 if (np.isnan(_wp) if isinstance(_wp, float) else False) else _wp / 100.0
+
+            # コースに応じた代表的な決まり手でスコア計算
+            if cp in [1, 2, 3]:
+                sashi_base = rk.get("差し", 0.0) / 100.0
+                score = sashi_base * kw + boat_wp * ww
+                if np.isnan(score) or score < 0.001:
+                    score = 0.001
+                _all_candidates.append({
+                    "type": "差し", "course": cp + 1, "idx": idx,
+                    "frame": frame, "name": name, "score": score,
+                    "factors": [],
+                })
+            if cp >= 2:
+                makuri_base = rk.get("まくり", 0.0) / 100.0
+                score = makuri_base * kw + boat_wp * (ww * 0.7)
+                if np.isnan(score) or score < 0.001:
+                    score = 0.001
+                _all_candidates.append({
+                    "type": "まくり", "course": cp + 1, "idx": idx,
+                    "frame": frame, "name": name, "score": score,
+                    "factors": [],
+                })
+        if _all_candidates:
+            _all_candidates.sort(key=lambda x: x["score"], reverse=True)
+            # 上位2件をフォールバックとして追加
+            attack_scenarios = _all_candidates[:2]
+
     all_scenarios = [{
         "type": "イン逃げ", "course": 1, "frame": c1_frame,
         "name": c1_name, "score": nige_score, "factors": nige_factors,
@@ -1342,7 +1383,7 @@ def generate_tenkai_prediction(
 
     all_scenarios.sort(key=lambda x: x["probability"], reverse=True)
 
-    # 上位2〜4件を選択
+    # 上位2〜4件を選択（最低2件は必ず含める）
     min_prob = W.get("tenkai_min_scenario_prob", 0.08)
     result = all_scenarios[:2]
     for s in all_scenarios[2:4]:
@@ -1367,8 +1408,8 @@ def generate_tenkai_prediction(
         else:
             s["confidence"] = 1
 
-        c_mark = _CIRCLED[s["course"] - 1]
-        c1_mark = _CIRCLED[0]
+        c_mark = _CIRCLED[int(s["frame"]) - 1]
+        c1_mark = _CIRCLED[int(c1_frame) - 1]
 
         # タイトル
         if s["type"] == "イン逃げ":
@@ -1387,7 +1428,7 @@ def generate_tenkai_prediction(
                 s["flow"] = f"{c1_mark}{c1_name}がスタート決めて先マイ。そのまま押し切る鉄板レース"
             else:
                 ch = top_challenger
-                ch_mark = _CIRCLED[ch["course"] - 1]
+                ch_mark = _CIRCLED[int(ch["frame"]) - 1]
                 if ch["type"] == "まくり":
                     s["flow"] = f"{c1_mark}{c1_name}が先マイ。{ch_mark}{ch['name']}がまくりに来るが{c1_mark}粘って逃げ切り"
                 elif ch["type"] == "差し":
