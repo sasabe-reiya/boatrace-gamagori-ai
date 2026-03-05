@@ -1988,6 +1988,7 @@ else:
         st.session_state.shutsusou_data = all_race_data
         st.session_state.shutsusou_date = d_str_s
         st.session_state.running = False
+        st.rerun()
 
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
     if st.session_state.running:
@@ -2037,27 +2038,31 @@ else:
                 html_rows.append(
                     f'<tr>'
                     f'<td style="background:{bg};color:{fg};text-align:center;'
-                    f'font-weight:bold;width:30px;border-radius:4px">{waku}</td>'
-                    f'<td style="color:#fff;font-weight:bold;padding-left:8px">{name}'
-                    f' <span style="color:#7ab8e8;font-size:0.75rem">{rank}</span></td>'
-                    f'<td style="color:#cce0ff;text-align:right">{nw}</td>'
-                    f'<td style="color:#cce0ff;text-align:right">{lw}</td>'
-                    f'<td style="color:#cce0ff;text-align:right">{m2}</td>'
-                    f'<td style="color:#cce0ff;text-align:right">{b2}</td>'
-                    f'<td style="color:#cce0ff;text-align:right">{st_val}</td>'
+                    f'font-weight:bold;width:22px;border-radius:4px">{waku}</td>'
+                    f'<td style="color:#fff;font-weight:bold;padding-left:4px;white-space:nowrap">{name}</td>'
+                    f'<td style="color:#7ab8e8;text-align:center;font-size:0.7rem">{rank}</td>'
+                    f'<td style="color:#cce0ff;text-align:center">{nw}</td>'
+                    f'<td style="color:#cce0ff;text-align:center">{lw}</td>'
+                    f'<td style="color:#cce0ff;text-align:center">{m2}</td>'
+                    f'<td style="color:#cce0ff;text-align:center">{b2}</td>'
+                    f'<td style="color:#cce0ff;text-align:center">{st_val}</td>'
                     f'</tr>'
                 )
 
+            _th = ('style="color:#7ab8e8;font-size:0.6rem;padding:3px 1px;'
+                   'text-align:center;white-space:nowrap;line-height:1.2"')
+            _sub = 'style="display:block;font-size:0.5rem;color:#5a9ad0;font-weight:normal"'
             table_html = (
-                '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:0">'
+                '<table style="width:100%;border-collapse:collapse;font-size:0.78rem;margin:0">'
                 '<thead><tr style="border-bottom:1px solid #2a4a80">'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px">枠</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:left">選手名</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">全国勝率</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">当地勝率</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾓｰﾀｰ2連率</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ﾎﾞｰﾄ2連率</th>'
-                '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 2px;text-align:right">ST</th>'
+                f'<th {_th}>枠</th>'
+                f'<th {_th}>選手名</th>'
+                f'<th {_th}>級別</th>'
+                f'<th {_th}>全国<span {_sub}>勝率</span></th>'
+                f'<th {_th}>当地<span {_sub}>勝率</span></th>'
+                f'<th {_th}>ﾓｰﾀ<span {_sub}>2連率</span></th>'
+                f'<th {_th}>ﾎﾞｰﾄ<span {_sub}>2連率</span></th>'
+                f'<th {_th}>ST</th>'
                 '</tr></thead>'
                 '<tbody>' + ''.join(html_rows) + '</tbody></table>'
             )
