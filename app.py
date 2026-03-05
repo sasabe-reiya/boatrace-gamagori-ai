@@ -253,9 +253,9 @@ st.markdown("""
         .exhibit-wrap table td { font-size: 0.7rem !important; padding: 4px 3px !important; }
 
         /* 三連単予想：モバイル横スクロール防止 */
-        .sanrentan-wrap table th { font-size: 0.6rem !important; padding: 2px 2px !important; }
-        .sanrentan-wrap table td { font-size: 0.65rem !important; padding: 2px 2px !important; }
-        .sanrentan-wrap table td .frame-badge { width: 16px !important; height: 16px !important; min-width: 16px !important; line-height: 16px !important; font-size: 0.6rem !important; }
+        .sanrentan-wrap table th { font-size: 0.7rem !important; padding: 3px 2px !important; }
+        .sanrentan-wrap table td { font-size: 0.75rem !important; padding: 3px 2px !important; }
+        .sanrentan-wrap table td .frame-badge { width: 18px !important; height: 18px !important; min-width: 18px !important; line-height: 18px !important; font-size: 0.7rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -356,6 +356,7 @@ if app_mode == "予想":
             st.session_state.nav_race = rno - 1
             st.session_state.result = None  # 結果をクリアして再実行トリガー
             st.session_state.running = True
+            st.session_state.show_settings = False
 
     def _go_next_race():
         rno = st.session_state.race_no or 1
@@ -363,6 +364,7 @@ if app_mode == "予想":
             st.session_state.nav_race = rno + 1
             st.session_state.result = None
             st.session_state.running = True
+            st.session_state.show_settings = False
 
     # ── セッション喪失時のキャッシュ復元 ─────────────────────────────
     # Google Appなどのインアプリブラウザでセッションが切断された場合、
@@ -393,11 +395,15 @@ if app_mode == "予想":
     # プレースホルダーを使い、予想実行後に即座にたたむ（st.rerun()不要）
     _settings_ph = st.empty()
 
-    if st.session_state.result is not None and not st.session_state.show_settings:
-        # 予想後で設定非表示: トグルボタンだけ表示
+    _hide_settings = not st.session_state.show_settings and (
+        st.session_state.result is not None or st.session_state.running
+    )
+    if _hide_settings:
+        # 予想実行中 or 予想後で設定非表示: トグルボタンだけ表示
         with _settings_ph.container():
-            st.button("▸ レース設定を開く", use_container_width=True,
-                      on_click=lambda: st.session_state.update(show_settings=True))
+            if not st.session_state.running:
+                st.button("▸ レース設定を開く", use_container_width=True,
+                          on_click=lambda: st.session_state.update(show_settings=True))
         race_no = None
         race_date = None
         fetch_btn = False
@@ -445,7 +451,7 @@ if app_mode == "予想":
                 _default_date = date.today()
             race_date = st.date_input("開催日", _default_date, disabled=_ui_disabled)
             fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True, disabled=_ui_disabled,
-                                   on_click=lambda: st.session_state.update(running=True))
+                                   on_click=lambda: st.session_state.update(running=True, show_settings=False))
 
     # ── 予想実行（ナビゲーション経由の自動実行を含む）───────────────
     _nav_auto = False
@@ -1097,7 +1103,7 @@ if app_mode == "予想":
 
         # ── 分析データテーブル ────────────────────────────────────────
         rno = st.session_state.race_no
-        st.markdown(f"#### 📋 {rno}R 分析データ")
+        st.markdown(f"### 📋 {rno}R 分析データ")
 
         base_cols  = ["枠番", "選手名", "級別"]
         extra_cols = []
@@ -1213,6 +1219,7 @@ if app_mode == "予想":
                 _tid2 = _uuid_m2.group(1)
                 _pcss = (
                     f"<style>"
+                    f"#{_tid2} th.col_heading.level0.col{_point_idx},"
                     f"#{_tid2} td.col{_point_idx} {{"
                     f" text-align:left !important;"
                     f"}}</style>"
@@ -1226,7 +1233,8 @@ if app_mode == "予想":
 
         # ── 展示データテーブル ──────────────────────────────────────
         if _has_exhibit:
-            st.markdown(f"#### 🚤 {rno}R 展示データ")
+            st.markdown("---")
+            st.markdown(f"### 🚤 {rno}R 展示データ")
 
             # 展示テーブル用カラム構築
             ex_cols = ["枠番", "選手名"]
@@ -1435,6 +1443,7 @@ if app_mode == "予想":
             st.caption("展開予想を生成するのに十分なデータがありません")
 
         # ── 高橋アナ予想パネル ────────────────────────────────────────
+        st.markdown("---")
         taka = st.session_state.taka or {}
         st.markdown("### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
 
@@ -1683,6 +1692,7 @@ if app_mode == "予想":
             st.caption("選手別決まり手データを取得できませんでした")
 
         # ── 3連単オッズ一覧表（expander） ──────────────────────────
+        st.markdown("---")
         if odds:
             st.markdown("### 📊 3連単オッズ一覧")
             if True:
@@ -1812,6 +1822,7 @@ if app_mode == "予想":
                 )
 
         # ── 艇別パフォーマンスレーダーチャート（expander） ─────────
+        st.markdown("---")
         st.markdown("### 📡 艇別パフォーマンスレーダーチャート")
 
         def _make_radar_chart(df_scored: pd.DataFrame) -> go.Figure:
