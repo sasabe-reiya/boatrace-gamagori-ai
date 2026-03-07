@@ -1580,10 +1580,15 @@ if app_mode == "予想":
             )
 
             # ── スタート展示図 ──────────────────────────────────────
-            _FRAME_BG_ST = {"1": "#fff", "2": "#000", "3": "#e74c3c",
-                            "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
-            _FRAME_FG_ST = {"1": "#000", "2": "#fff", "3": "#fff",
-                            "4": "#fff", "5": "#000", "6": "#000"}
+            # ボート画像をbase64エンコードで読み込み
+            import base64 as _b64
+            from pathlib import Path as _Path
+            _boat_img_dir = _Path(__file__).parent / "船画像"
+            _boat_b64 = {}
+            for _bno in range(1, 7):
+                _bpath = _boat_img_dir / f"{_bno}.png"
+                if _bpath.exists():
+                    _boat_b64[str(_bno)] = _b64.b64encode(_bpath.read_bytes()).decode()
             _has_st_display = (
                 "ST展示" in scored.columns
                 and scored["ST展示"].apply(lambda x: isinstance(x, str) and len(x) > 0).any()
@@ -1613,67 +1618,87 @@ if app_mode == "予想":
                         return None
 
                 _st_vals = [_parse_st_val(r["st"]) for r in _course_rows]
-                # 固定スケール: 0.30秒 = 全幅。実際の差は0.0x秒程度なので控えめに
-                _scale_st = 0.30
+                # スリット線の位置（left %）
+                _slit_left = 72
+                # 0.01秒あたりのオフセット（%）
+                _px_per_001 = 0.8
 
+                # --- HTML ---
                 _sd_html = (
-                    '<div style="background:linear-gradient(180deg,#0a1628 0%,#122040 100%);'
-                    'border-radius:8px;padding:12px 16px;margin-top:12px;position:relative;">'
-                    '<div style="margin-bottom:8px;">'
-                    '<span style="color:#7ab8e8;font-size:0.8rem;font-weight:bold;">スタート展示</span>'
+                    '<div style="background:#0c1a2e;border-radius:10px;padding:14px 0 10px 0;'
+                    'margin-top:12px;position:relative;overflow:hidden;max-width:50%;">'
+                    # ヘッダー
+                    '<div style="display:flex;justify-content:space-between;align-items:center;'
+                    'padding:0 16px;margin-bottom:6px;">'
+                    '<span style="color:#8bb8d8;font-size:0.78rem;font-weight:bold;letter-spacing:1px;">スタート展示</span>'
+                    '<span style="color:#4a6a8a;font-size:0.7rem;">ST</span>'
                     '</div>'
+                    # ボート行ラッパー（スリット線の基準）
+                    '<div style="position:relative;">'
                 )
 
                 for cr in _course_rows:
                     w = cr["waku"]
                     st_str = cr["st"]
                     st_sec = _parse_st_val(st_str)
-                    bg = _FRAME_BG_ST.get(w, "#666")
-                    fg = _FRAME_FG_ST.get(w, "#fff")
-                    border = "border:1.5px solid #666;" if w == "1" else ""
                     is_flying = st_str.strip().upper().startswith("F") if st_str else False
 
+                    # ボート位置: スリット線から絶対距離（0.01秒 = _px_per_001 %）
                     if st_sec is not None and _has_st_display:
                         if st_sec < 0:
-                            right_pct = 0
+                            boat_left = _slit_left + abs(st_sec) * 100 * _px_per_001
                         else:
-                            right_pct = 25 + max(0, min(50, (st_sec / _scale_st) * 50))
+                            boat_left = _slit_left - st_sec * 100 * _px_per_001
+                        boat_left = max(2, min(95, boat_left))
                     else:
-                        right_pct = 50
+                        boat_left = _slit_left - 20
 
+                    # ST表示
                     if st_str and _has_st_display:
                         if is_flying:
-                            st_color = "#ff4444"
+                            st_color = "#ff3333"
+                            st_weight = "bold"
                             st_label = f"F{st_str.strip()[1:]}"
                         else:
-                            st_color = "#e8f4ff"
+                            st_color = "#c0d8f0"
+                            st_weight = "600"
                             st_label = st_str.strip()
                     else:
-                        st_color = "#5a7a9e"
+                        st_color = "#4a6a8a"
+                        st_weight = "normal"
                         st_label = "-"
 
+                    # ボート画像
+                    _b64_data = _boat_b64.get(w, "")
+                    if _b64_data:
+                        _boat_icon = (
+                            f'<img src="data:image/png;base64,{_b64_data}" '
+                            f'width="40" height="24" style="display:block;" />'
+                        )
+                    else:
+                        _boat_icon = f'<span style="font-size:0.8rem;font-weight:bold;color:#fff;">{w}</span>'
+
                     _sd_html += (
-                        f'<div style="position:relative;height:34px;margin:1px 0;'
-                        f'border-bottom:1px solid rgba(30,95,168,0.15);">'
-                        # ボート + ST値をセットで配置
-                        f'<div style="position:absolute;right:{right_pct}%;top:50%;transform:translateY(-50%);'
-                        f'display:flex;align-items:center;gap:4px;">'
-                        f'<span style="font-size:0.75rem;font-weight:bold;color:{st_color};'
-                        f'white-space:nowrap;">{st_label}</span>'
-                        f'<div style="width:24px;height:24px;border-radius:50%;background:{bg};{border}'
-                        f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
-                        f'font-size:0.75rem;font-weight:bold;color:{fg};'
-                        f'box-shadow:0 1px 3px rgba(0,0,0,0.4);">{w}</div>'
-                        f'</div>'
+                        f'<div style="display:flex;align-items:center;height:36px;'
+                        f'border-bottom:1px solid rgba(40,70,110,0.25);position:relative;">'
+                        # ボートアイコン（右端がboat_left%の位置に来るように配置）
+                        f'<div style="position:absolute;left:{boat_left}%;top:50%;'
+                        f'transform:translate(-100%,-50%);z-index:2;">{_boat_icon}</div>'
+                        # ST値（右端固定）
+                        f'<div style="position:absolute;right:14px;top:50%;transform:translateY(-50%);'
+                        f'font-size:0.88rem;font-weight:{st_weight};color:{st_color};'
+                        f'font-variant-numeric:tabular-nums;">{st_label}</div>'
                         f'</div>'
                     )
 
-                # スリット線
+                # スリット線（縦線）- ボート行ラッパー内
                 _sd_html += (
-                    '<div style="position:absolute;right:23%;top:38px;bottom:12px;width:1.5px;'
-                    'background:rgba(255,255,255,0.25);pointer-events:none;"></div>'
+                    f'<div style="position:absolute;left:{_slit_left}%;top:0;bottom:0;'
+                    f'width:3px;background:rgba(140,190,240,0.6);'
+                    f'pointer-events:none;"></div>'
                 )
-                _sd_html += '</div>'
+                _sd_html += '</div>'  # ボート行ラッパー閉じ
+                _sd_html += '</div>'  # 外側コンテナ閉じ
                 st.markdown(_sd_html, unsafe_allow_html=True)
 
         st.markdown("---")
