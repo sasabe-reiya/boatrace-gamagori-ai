@@ -184,7 +184,8 @@ if "venue" not in st.query_params:
                 st.rerun()
     st.stop()
 
-_st_html("""<script>
+st.markdown("""
+<script>
 (function(){
   function makeReadonly(){
     document.querySelectorAll('[data-testid="stDateInput"] input').forEach(function(el){
@@ -194,8 +195,7 @@ _st_html("""<script>
   makeReadonly();
   new MutationObserver(makeReadonly).observe(document.body,{childList:true,subtree:true});
 })();
-</script>""", height=0)
-st.markdown("""
+</script>
 <style>
     /* ── 日付入力: カレンダー位置修正 ── */
     [data-baseweb="popover"] { margin-top: 8px !important; }
