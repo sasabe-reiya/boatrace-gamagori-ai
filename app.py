@@ -1613,9 +1613,8 @@ if app_mode == "予想":
                         return None
 
                 _st_vals = [_parse_st_val(r["st"]) for r in _course_rows]
-                _max_st = max((v for v in _st_vals if v is not None and v > 0), default=0.20)
-                if _max_st <= 0:
-                    _max_st = 0.20
+                # 固定スケール: 0.30秒 = 全幅。実際の差は0.0x秒程度なので控えめに
+                _scale_st = 0.30
 
                 _sd_html = (
                     '<div style="background:linear-gradient(180deg,#0a1628 0%,#122040 100%);'
@@ -1638,7 +1637,7 @@ if app_mode == "予想":
                         if st_sec < 0:
                             right_pct = 0
                         else:
-                            right_pct = 10 + max(0, min(75, (st_sec / _max_st) * 65))
+                            right_pct = 25 + max(0, min(50, (st_sec / _scale_st) * 50))
                     else:
                         right_pct = 50
 
@@ -1671,7 +1670,7 @@ if app_mode == "予想":
 
                 # スリット線
                 _sd_html += (
-                    '<div style="position:absolute;right:8%;top:38px;bottom:12px;width:1.5px;'
+                    '<div style="position:absolute;right:23%;top:38px;bottom:12px;width:1.5px;'
                     'background:rgba(255,255,255,0.25);pointer-events:none;"></div>'
                 )
                 _sd_html += '</div>'
