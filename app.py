@@ -38,6 +38,37 @@ from result_tracker import save_prediction
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "_cache")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
+# ── 実行時間の記録・推定 ─────────────────────────────────────────
+_EXEC_TIMES_PATH = os.path.join(_CACHE_DIR, "execution_times.json")
+_DEFAULT_TOTAL = 7.0  # 初回用デフォルト合計秒数
+
+def _load_avg_total():
+    try:
+        with open(_EXEC_TIMES_PATH, "r") as f:
+            history = json.load(f)
+        if not history:
+            return _DEFAULT_TOTAL
+        return sum(history) / len(history)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return _DEFAULT_TOTAL
+
+def _save_exec_total(total_sec: float):
+    try:
+        with open(_EXEC_TIMES_PATH, "r") as f:
+            history = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        history = []
+    history.append(total_sec)
+    history = history[-10:]
+    with open(_EXEC_TIMES_PATH, "w") as f:
+        json.dump(history, f)
+
+def _fmt_remaining(sec):
+    sec = max(0, round(sec))
+    if sec < 60:
+        return f"残り約{sec}秒"
+    return f"残り約{sec // 60}分{sec % 60}秒"
+
 def _cache_path(race_no, d_str, device_id=""):
     if device_id:
         return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}_{device_id}.json")
@@ -392,13 +423,15 @@ if app_mode == "予想":
     # ── 設定パネル表示フラグ ──────────────────────────────────────────
     if "show_settings" not in st.session_state:
         st.session_state.show_settings = True  # 初回は開いた状態
+    if "_fetch_error" not in st.session_state:
+        st.session_state._fetch_error = None
 
     # ── レース設定パネル（メインエリア） ─────────────────────────────
     # プレースホルダーを使い、予想実行後に即座にたたむ（st.rerun()不要）
     _settings_ph = st.empty()
 
-    _hide_settings = not st.session_state.show_settings and (
-        st.session_state.result is not None or st.session_state.running
+    _hide_settings = st.session_state.running or (
+        not st.session_state.show_settings and st.session_state.result is not None
     )
     if _hide_settings:
         # 予想実行中 or 予想後で設定非表示: トグルボタンだけ表示
@@ -411,8 +444,13 @@ if app_mode == "予想":
                     f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
                     f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
                     f'<span style="color:#7ab8e8;font-size:0.85rem">'
-                    f'📡 {_run_date_str} <b>{_run_rno}R</b> の予想を実行中…</span>'
-                    f'</div>',
+                    f'📡 予想を実行中…</span>'
+                    f'<div style="margin-top:0.4rem">'
+                    f'<span style="display:inline-block;width:22px;height:22px;'
+                    f'border:3px solid rgba(122,184,232,0.3);border-top:3px solid #7ab8e8;'
+                    f'border-radius:50%;animation:spin 1s linear infinite"></span></div>'
+                    f'</div>'
+                    f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                     unsafe_allow_html=True,
                 )
             else:
@@ -472,9 +510,13 @@ if app_mode == "予想":
                 st.session_state.show_settings = False
                 st.session_state._exec_race_no = race_no
                 st.session_state._exec_race_date = race_date
-                st.session_state.result = None  # 旧結果をクリア（設定パネル即折りたたみ）
+                st.session_state.result = None
             fetch_btn  = st.button("▶ 予想実行", type="primary", use_container_width=True, disabled=_ui_disabled,
                                    on_click=_on_fetch_click)
+            # 前回実行時のエラーメッセージを表示
+            if st.session_state._fetch_error:
+                st.error(st.session_state._fetch_error)
+                st.session_state._fetch_error = None
 
     # ── 予想実行（ナビゲーション経由の自動実行を含む）───────────────
     _nav_auto = False
@@ -511,6 +553,8 @@ if app_mode == "予想":
 
     if fetch_btn or _nav_auto or _run_from_state:
         # 設定パネルを即座に折りたたむ → 実行中表示に差し替え
+        st.session_state.show_settings = False
+        st.session_state.running = True
         _settings_ph.empty()
         d_str = race_date.strftime("%Y%m%d")
         _run_date_fmt = race_date.strftime("%Y年%m月%d日") if hasattr(race_date, "strftime") else str(race_date)
@@ -520,7 +564,12 @@ if app_mode == "予想":
                 f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
                 f'<span style="color:#7ab8e8;font-size:0.85rem">'
                 f'📡 {_run_date_fmt} <b>{race_no}R</b> の予想を実行中…</span>'
-                f'</div>',
+                f'<div style="margin-top:0.4rem">'
+                f'<span style="display:inline-block;width:22px;height:22px;'
+                f'border:3px solid rgba(122,184,232,0.3);border-top:3px solid #7ab8e8;'
+                f'border-radius:50%;animation:spin 1s linear infinite"></span></div>'
+                f'</div>'
+                f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                 unsafe_allow_html=True,
             )
 
@@ -530,7 +579,9 @@ if app_mode == "予想":
             st.rerun()
         st.session_state.pop("_ui_flushed", None)
 
-        progress_bar = st.progress(0, text="⏳ データ取得を開始します...")
+        _avg_total = _load_avg_total()
+        _t_start = time.time()
+        progress_bar = st.progress(0, text=f"⏳ データ取得を開始します...｜{_fmt_remaining(_avg_total)}")
 
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
         # fetch_base_race_data は内部で3並列（soup+beforeinfo+gamagori_time）
@@ -557,7 +608,8 @@ if app_mode == "予想":
                 done_count += 1
                 name = phase1_map[future]
                 pct = int((done_count / total_tasks) * 60)
-                progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})")
+                _remaining = max(0, _avg_total - (time.time() - _t_start))
+                progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
 
             df_raw, weather, racelist_soup = f_data.result()
             odds     = f_odds.result()
@@ -582,7 +634,8 @@ if app_mode == "予想":
                         _cm[_f] = int(_c)
                 if _cm and _cm != {str(i): i for i in range(1, 7)}:
                     _course_map = _cm  # 枠番順と異なる場合のみ渡す
-            progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})")
+            _remaining = max(0, _avg_total - (time.time() - _t_start))
+            progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f_ext      = executor.submit(fetch_extended_player_data, reg_nos)
                 f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str, df_raw, course_map=_course_map)
@@ -592,7 +645,8 @@ if app_mode == "予想":
                     done_count += 1
                     name = phase2_map[future]
                     pct = int((done_count / total_tasks) * 60)
-                    progress_bar.progress(pct, text=f"⏳ 選手詳細データ取得中... {name} 完了 ({done_count}/{total_tasks})")
+                    _remaining = max(0, _avg_total - (time.time() - _t_start))
+                    progress_bar.progress(pct, text=f"⏳ 選手詳細データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
 
                 ext_data = f_ext.result()
                 racer_km = f_racer_km.result()
@@ -604,7 +658,8 @@ if app_mode == "予想":
         odds_2t = odds_2tf.get("2連単", {})
 
         if not df_raw.empty:
-            progress_bar.progress(70, text="🧠 AI予想を計算中...")
+            _remaining = max(0, _avg_total - (time.time() - _t_start))
+            progress_bar.progress(70, text=f"🧠 AI予想を計算中...｜{_fmt_remaining(_remaining)}")
             try:
                 result = predict(
                     df_raw, weather, race_no,
@@ -618,12 +673,15 @@ if app_mode == "予想":
                 time.sleep(1)
                 progress_bar.empty()
                 st.session_state.running = False
+                st.session_state.show_settings = True
+                st.session_state.result = None
                 st.session_state.pop("_exec_race_no", None)
                 st.session_state.pop("_exec_race_date", None)
-                st.error(f"予想計算中にエラーが発生しました: {e}")
-                st.stop()
+                st.session_state._fetch_error = f"予想計算中にエラーが発生しました: {e}\nレース設定を変更して再度お試しください。"
+                st.rerun()
 
-            progress_bar.progress(90, text="💾 予想結果を保存中...")
+            _remaining = max(0, _avg_total - (time.time() - _t_start))
+            progress_bar.progress(90, text=f"💾 予想結果を保存中...｜{_fmt_remaining(_remaining)}")
             st.session_state.result      = result
             st.session_state.weather     = weather
             st.session_state.deadline    = deadline
@@ -645,6 +703,7 @@ if app_mode == "予想":
             except Exception:
                 pass  # 保存失敗しても予想表示は続行
 
+            _save_exec_total(time.time() - _t_start)
             progress_bar.progress(100, text="✅ 予想完了！")
             progress_bar.empty()
 
@@ -666,13 +725,14 @@ if app_mode == "予想":
             st.rerun()
 
         else:
-            progress_bar.progress(100, text="❌ データ取得失敗")
-            time.sleep(1)
             progress_bar.empty()
+            st.session_state.result = None
             st.session_state.running = False
+            st.session_state.show_settings = True
             st.session_state.pop("_exec_race_no", None)
             st.session_state.pop("_exec_race_date", None)
-            st.error("データが取得できませんでした。開催時間外の可能性があります。")
+            st.session_state._fetch_error = "データが取得できませんでした。開催時間外の可能性があります。レース設定を変更して再度お試しください。"
+            st.rerun()
 
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
     if st.session_state.running:
@@ -2039,7 +2099,7 @@ if app_mode == "予想":
                 polar=dict(
                     radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
                     angularaxis=dict(
-                        tickfont=dict(size=11, color="#7ab8e8"),
+                        tickfont=dict(size=10, color="#7ab8e8"),
                         rotation=90,
                         direction="clockwise",
                     ),
@@ -2048,8 +2108,8 @@ if app_mode == "予想":
                 showlegend=True,
                 legend=dict(font=dict(color="#e8f4ff"), bgcolor="rgba(14,26,46,0.8)"),
                 paper_bgcolor="#0e1a2e",
-                margin=dict(l=20, r=20, t=20, b=20),
-                height=340,
+                margin=dict(l=60, r=60, t=40, b=40),
+                height=400,
             )
             return fig
 
@@ -2143,6 +2203,8 @@ else:
         st.session_state.shutsusou_data = None
     if "shutsusou_date" not in st.session_state:
         st.session_state.shutsusou_date = None
+    if "_shutsusou_error" not in st.session_state:
+        st.session_state._shutsusou_error = None
 
     # 枠番カラー
     _WAKU_COLORS = {
@@ -2156,18 +2218,23 @@ else:
 
     _shutsusou_settings_ph = st.empty()
 
-    _hide_shutsusou_settings = st.session_state.running and st.session_state.shutsusou_data is None
+    _hide_shutsusou_settings = st.session_state.running
 
     if _hide_shutsusou_settings:
+        _s_run_date = st.session_state.get("_exec_shutsusou_date")
+        _s_date_str = _s_run_date.strftime("%Y年%m月%d日") if _s_run_date and hasattr(_s_run_date, "strftime") else ""
         with _shutsusou_settings_ph.container():
-            _s_run_date = st.session_state.get("_exec_shutsusou_date")
-            _s_date_str = _s_run_date.strftime("%Y年%m月%d日") if _s_run_date and hasattr(_s_run_date, "strftime") else ""
             st.markdown(
                 f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
                 f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
                 f'<span style="color:#7ab8e8;font-size:0.85rem">'
-                f'📡 {_s_date_str} の出走表一覧を取得中…</span>'
-                f'</div>',
+                f'📡 出走表一覧を取得中…</span>'
+                f'<div style="margin-top:0.4rem">'
+                f'<span style="display:inline-block;width:22px;height:22px;'
+                f'border:3px solid rgba(122,184,232,0.3);border-top:3px solid #7ab8e8;'
+                f'border-radius:50%;animation:spin 1s linear infinite"></span></div>'
+                f'</div>'
+                f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                 unsafe_allow_html=True,
             )
         shutsusou_date = _s_run_date
@@ -2196,11 +2263,38 @@ else:
             def _on_shutsusou_click():
                 st.session_state.running = True
                 st.session_state._exec_shutsusou_date = shutsusou_date
-
             fetch_shutsusou = st.button("▶ 出走表を取得", type="primary", use_container_width=True, disabled=_ui_disabled,
                                         on_click=_on_shutsusou_click)
+            # 前回実行時のエラーメッセージを表示
+            if st.session_state._shutsusou_error:
+                st.error(st.session_state._shutsusou_error)
+                st.session_state._shutsusou_error = None
 
-    if fetch_shutsusou:
+    # running フラグが立っている場合（設定パネルが非表示でも）取得を実行
+    _shutsusou_run_from_state = False
+    if st.session_state.running and not fetch_shutsusou:
+        shutsusou_date = st.session_state.get("_exec_shutsusou_date")
+        if shutsusou_date is not None:
+            _shutsusou_run_from_state = True
+
+    if fetch_shutsusou or _shutsusou_run_from_state:
+        if _shutsusou_run_from_state:
+            _shutsusou_settings_ph.empty()
+            _s_date_str2 = shutsusou_date.strftime("%Y年%m月%d日") if hasattr(shutsusou_date, "strftime") else ""
+            with _shutsusou_settings_ph.container():
+                st.markdown(
+                    f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                    f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
+                    f'<span style="color:#7ab8e8;font-size:0.85rem">'
+                    f'📡 {_s_date_str2} の出走表一覧を取得中…</span>'
+                    f'<div style="margin-top:0.4rem">'
+                    f'<span style="display:inline-block;width:22px;height:22px;'
+                    f'border:3px solid rgba(122,184,232,0.3);border-top:3px solid #7ab8e8;'
+                    f'border-radius:50%;animation:spin 1s linear infinite"></span></div>'
+                    f'</div>'
+                    f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
+                    unsafe_allow_html=True,
+                )
         d_str_s = shutsusou_date.strftime("%Y%m%d")
         progress = st.progress(0, text="⏳ 全レースの出走表を取得中...")
 
@@ -2229,15 +2323,24 @@ else:
                     pass
         _session.close()
 
-        progress.progress(100, text="✅ 出走表取得完了")
-        time.sleep(0.3)
-        progress.empty()
+        if all_race_data:
+            progress.progress(100, text="✅ 出走表取得完了")
+            time.sleep(0.3)
+            progress.empty()
 
-        st.session_state.shutsusou_data = all_race_data
-        st.session_state.shutsusou_date = d_str_s
-        st.session_state.running = False
-        st.session_state.pop("_exec_shutsusou_date", None)
-        st.rerun()
+            st.session_state.shutsusou_data = all_race_data
+            st.session_state.shutsusou_date = d_str_s
+            st.session_state.running = False
+            st.session_state.pop("_exec_shutsusou_date", None)
+            st.rerun()
+        else:
+            progress.empty()
+            st.session_state.shutsusou_data = None
+            st.session_state.shutsusou_date = None
+            st.session_state.running = False
+            st.session_state.pop("_exec_shutsusou_date", None)
+            st.session_state._shutsusou_error = "出走表を取得できませんでした。該当日にレースが開催されていない可能性があります。日付を変更して再度お試しください。"
+            st.rerun()
 
     # ── 安全リセット: 実行フラグが残っていたら解除 ────────────────────
     if st.session_state.running:
