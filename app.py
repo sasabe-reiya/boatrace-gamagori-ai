@@ -198,11 +198,14 @@ st.markdown("""
     div[class*="StatusWidget"] { display: none !important; }
     a[href*="streamlit.io"] { display: none !important; }
     /* ── pills改行制御 ── */
-    .st-key-race_no_pills_wrap [role="tablist"] { flex-wrap: wrap !important; }
-    .st-key-race_no_pills_wrap [role="tablist"] > button:nth-child(6) { margin-right: 100% !important; }
-    .st-key-date_pills_wrap [role="tablist"] { flex-wrap: wrap !important; }
-    .st-key-date_pills_wrap [role="tablist"] > button:nth-child(3) { margin-right: 100% !important; }
-    .st-key-date_pills_wrap [role="tablist"] > button:nth-child(4) { margin-right: 100% !important; }
+    .st-key-race_no_pills_wrap div[data-testid="stPills"] > div { flex-wrap: wrap !important; }
+    .st-key-race_no_pills_wrap div[data-testid="stPills"] > div > div:nth-child(6) { margin-right: 100% !important; }
+    .st-key-race_no_pills_wrap div[data-testid="stPills"] > div > button:nth-child(6) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap div[data-testid="stPills"] > div { flex-wrap: wrap !important; }
+    .st-key-date_pills_wrap div[data-testid="stPills"] > div > div:nth-child(3) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap div[data-testid="stPills"] > div > div:nth-child(4) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap div[data-testid="stPills"] > div > button:nth-child(3) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap div[data-testid="stPills"] > div > button:nth-child(4) { margin-right: 100% !important; }
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
     .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
