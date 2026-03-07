@@ -367,12 +367,16 @@ with _hdr_cols[1]:
         del st.query_params["venue"]
         st.rerun()
 
-app_mode = st.radio(
-    "モード", ["予想", "出走表一覧"], horizontal=True,
+app_mode = st.pills(
+    "モード", ["予想", "出走表一覧"],
     label_visibility="collapsed",
     key="app_mode",
     disabled=_ui_disabled,
+    default="予想",
 )
+
+if not app_mode:
+    app_mode = "予想"
 
 if app_mode == "予想":
     # ══════════════════════════════════════════════════════════════
@@ -498,30 +502,30 @@ if app_mode == "予想":
             # session_state 初期化（初回のみ query_params から復元）
             if "radio_race_no" not in st.session_state:
                 st.session_state.radio_race_no = max(1, min(12, int(st.query_params.get("race", 1))))
-            race_no   = st.radio("レース番号", list(range(1, 13)), index=st.session_state.radio_race_no - 1, horizontal=True, format_func=lambda x: f"{x}R", disabled=_ui_disabled, key="radio_race_no_widget")
+            race_no   = st.pills("レース番号", list(range(1, 13)), default=st.session_state.radio_race_no, disabled=_ui_disabled, key="radio_race_no_widget", format_func=lambda x: f"{x}R")
             # 選択値を session_state と query_params に反映
             st.session_state.radio_race_no = race_no
             if str(race_no) != st.query_params.get("race"):
                 st.query_params["race"] = str(race_no)
-            _d_param = st.query_params.get("d")
-            if _d_param:
-                try:
-                    _default_date = datetime.strptime(_d_param, "%Y%m%d").date()
-                except ValueError:
-                    _default_date = date.today()
-            else:
-                _default_date = date.today()
-            _date_options = [date.today() + timedelta(days=i) for i in range(-3, 8)]
-            _default_idx = 0
-            for _di, _dopt in enumerate(_date_options):
-                if _dopt == _default_date:
-                    _default_idx = _di
-                    break
-            race_date = st.selectbox("開催日", _date_options, index=_default_idx, disabled=_ui_disabled,
-                                     format_func=lambda d: d.strftime("%Y/%m/%d") + (" (今日)" if d == date.today() else ""))
-            _d_val = race_date.strftime("%Y%m%d")
-            if _d_val != st.query_params.get("d"):
-                st.query_params["d"] = _d_val
+            _date_options = [date.today() + timedelta(days=i) for i in range(-3, 4)]
+            _date_labels = {d: d.strftime("%m/%d") + ("(今日)" if d == date.today() else "") for d in _date_options}
+            if "pills_race_date" not in st.session_state:
+                _d_param = st.query_params.get("d")
+                if _d_param:
+                    try:
+                        st.session_state.pills_race_date = datetime.strptime(_d_param, "%Y%m%d").date()
+                    except ValueError:
+                        st.session_state.pills_race_date = date.today()
+                else:
+                    st.session_state.pills_race_date = date.today()
+                if st.session_state.pills_race_date not in _date_options:
+                    st.session_state.pills_race_date = date.today()
+            race_date = st.pills("開催日", _date_options, disabled=_ui_disabled, key="pills_race_date",
+                                 format_func=lambda d: _date_labels[d])
+            if race_date:
+                _d_val = race_date.strftime("%Y%m%d")
+                if _d_val != st.query_params.get("d"):
+                    st.query_params["d"] = _d_val
             def _on_fetch_click():
                 st.session_state.running = True
                 st.session_state.show_settings = False
@@ -1152,7 +1156,7 @@ if app_mode == "予想":
                              'font-size:0.7rem;border-bottom:2px solid #1e5fa8;white-space:nowrap;text-align:center')
                 hdr = (
                     f'<tr>'
-                    f'<th style="{_th_style};width:24px">#</th>'
+                    f'<th style="{_th_style};width:30px">#</th>'
                     f'<th style="{_th_style};width:28%">組番</th>'
                     f'<th style="{_th_style}">確率</th>'
                     f'<th style="{_th_style}">実ｵｯｽﾞ</th>'
@@ -1237,7 +1241,7 @@ if app_mode == "予想":
                     body += (
                         f'<tr style="background:{row_bg};{row_border}{_zero_opacity}height:32px">'
                         f'<td style="{_td_base};text-align:center;color:#7ab8e8;'
-                        f'font-size:0.72rem">{_row_num}</td>'
+                        f'font-size:0.72rem;white-space:nowrap">{_row_num}</td>'
                         f'<td style="{_td_base};text-align:left">{combo_html}</td>'
                         f'<td style="{_td_base};text-align:right;color:#fff;'
                         f'font-size:0.78rem">{prob_str}</td>'
@@ -2294,14 +2298,11 @@ else:
             else:
                 _default_date_s = date.today()
 
-            _date_options_s = [date.today() + timedelta(days=i) for i in range(-3, 8)]
-            _default_idx_s = 0
-            for _di_s, _dopt_s in enumerate(_date_options_s):
-                if _dopt_s == _default_date_s:
-                    _default_idx_s = _di_s
-                    break
-            shutsusou_date = st.selectbox("開催日", _date_options_s, index=_default_idx_s, key="shutsusou_date_input", disabled=_ui_disabled,
-                                          format_func=lambda d: d.strftime("%Y/%m/%d") + (" (今日)" if d == date.today() else ""))
+            _date_options_s = [date.today() + timedelta(days=i) for i in range(-3, 4)]
+            _date_labels_s = {d: d.strftime("%m/%d") + ("(今日)" if d == date.today() else "") for d in _date_options_s}
+            _default_pill_s = _default_date_s if _default_date_s in _date_options_s else date.today()
+            shutsusou_date = st.pills("開催日", _date_options_s, default=_default_pill_s, key="shutsusou_date_input", disabled=_ui_disabled,
+                                      format_func=lambda d: _date_labels_s[d])
 
             def _on_shutsusou_click():
                 st.session_state.running = True
