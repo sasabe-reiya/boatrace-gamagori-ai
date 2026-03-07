@@ -457,6 +457,14 @@ if app_mode == "予想":
     if "_fetch_error" not in st.session_state:
         st.session_state._fetch_error = None
 
+    # ── 停止ボタン用コールバック ────────────────────────────────────
+    def _on_stop_click():
+        st.session_state.running = False
+        st.session_state.show_settings = True
+        st.session_state.pop("_exec_race_no", None)
+        st.session_state.pop("_exec_race_date", None)
+        st.session_state.pop("_ui_flushed", None)
+
     # ── レース設定パネル（メインエリア） ─────────────────────────────
     # プレースホルダーを使い、予想実行後に即座にたたむ（st.rerun()不要）
     _settings_ph = st.empty()
@@ -486,6 +494,8 @@ if app_mode == "予想":
                     f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                     unsafe_allow_html=True,
                 )
+                st.button("⏹ 予想を停止", use_container_width=True, key="stop_btn_init",
+                          on_click=_on_stop_click)
             else:
                 st.button("▸ レース設定を開く", use_container_width=True,
                           on_click=lambda: st.session_state.update(show_settings=True))
@@ -616,6 +626,8 @@ if app_mode == "予想":
                 f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                 unsafe_allow_html=True,
             )
+            st.button("⏹ 予想を停止", use_container_width=True, key="stop_btn_exec",
+                      on_click=_on_stop_click)
 
         # UI折りたたみをブラウザに反映してから予想を開始する
         if not st.session_state.get("_ui_flushed"):
@@ -2276,6 +2288,10 @@ else:
         6: ("#20a040", "#fff"), # 緑
     }
 
+    def _on_stop_shutsusou_click():
+        st.session_state.running = False
+        st.session_state.pop("_exec_shutsusou_date", None)
+
     _shutsusou_settings_ph = st.empty()
     _shutsusou_form_ph = st.empty()
 
@@ -2299,6 +2315,8 @@ else:
                 f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                 unsafe_allow_html=True,
             )
+            st.button("⏹ 取得を停止", use_container_width=True, key="stop_btn_shutsusou_init",
+                      on_click=_on_stop_shutsusou_click)
         shutsusou_date = _s_run_date
         fetch_shutsusou = False
     else:
@@ -2362,6 +2380,8 @@ else:
                     f'<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>',
                     unsafe_allow_html=True,
                 )
+                st.button("⏹ 取得を停止", use_container_width=True, key="stop_btn_shutsusou_exec",
+                          on_click=_on_stop_shutsusou_click)
         d_str_s = shutsusou_date.strftime("%Y%m%d")
         progress = st.progress(0, text="⏳ 全レースの出走表を取得中...")
 
