@@ -175,24 +175,30 @@ if "venue" not in st.query_params:
     st.markdown("##### レース場を選択してください")
     st.markdown("")
 
+    st.markdown('<style>[data-testid="stButton"] button[kind="primary"] { padding: 2.5rem 1rem; font-size: 1.1rem; color: #0a1628 !important; font-weight: bold; }</style>', unsafe_allow_html=True)
     _vs_cols = st.columns(len(VENUE_CONFIGS))
     for i, (code, vcfg) in enumerate(VENUE_CONFIGS.items()):
         with _vs_cols[i]:
-            st.markdown(
-                f'<div style="background:#1a2744;border:1px solid #2a4a80;border-radius:12px;'
-                f'padding:1.2rem 0.8rem;text-align:center;margin-bottom:0.5rem">'
-                f'<div style="font-size:1.5rem;font-weight:bold;color:#e8f4ff">{vcfg["short_name"]}</div>'
-                f'<div style="font-size:0.7rem;color:#5a9fd4;margin-top:4px">{vcfg["en_name"]}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            if st.button(f'{vcfg["short_name"]}で予想', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
+            if st.button(f'{vcfg["short_name"]}\n{vcfg["en_name"]}', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
                 st.query_params["venue"] = code
                 st.rerun()
     st.stop()
 
+_st_html("""<script>
+(function(){
+  function makeReadonly(){
+    document.querySelectorAll('[data-testid="stDateInput"] input').forEach(function(el){
+      if(!el.hasAttribute('readonly')){el.setAttribute('readonly','readonly');}
+    });
+  }
+  makeReadonly();
+  new MutationObserver(makeReadonly).observe(document.body,{childList:true,subtree:true});
+})();
+</script>""", height=0)
 st.markdown("""
 <style>
+    /* ── 日付入力: カレンダー位置修正 ── */
+    [data-baseweb="popover"] { margin-top: 8px !important; }
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
     .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
