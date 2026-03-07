@@ -1,5 +1,5 @@
 @echo off
-chcp 932 >nul 2>&1
+chcp 65001 >nul 2>&1
 cd /d %~dp0
 
 echo ============================================
@@ -8,7 +8,7 @@ echo ============================================
 echo.
 
 echo [1/3] Staging files...
-git add app.py config.py scorer.py race_scraper.py backtester.py ml_optimizer.py result_tracker.py requirements.txt .gitignore .streamlit/config.toml _ml_result.json deploy.bat
+git add app.py config.py scorer.py race_scraper.py backtester.py ml_optimizer.py result_tracker.py requirements.txt .gitignore .streamlit/config.toml _ml_result.json deploy.bat tune_bayes.py _bayes_tune_result.json 船画像/
 if errorlevel 1 goto :ERROR_ADD
 echo       OK
 echo.

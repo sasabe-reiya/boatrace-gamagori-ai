@@ -1,0 +1,100 @@
+{
+  "optimized_weights": {
+    "individual_temp": 4.885,
+    "win_rate": 1.708,
+    "local_win_rate": 0.829,
+    "nat2_rate": 3.81,
+    "loc2_rate": 0.178,
+    "exhibit_time": 0.745,
+    "exhibit_top_bonus": 2.598,
+    "night_boost": 0.605,
+    "calm_in_boost": -6.042,
+    "st_weight": 125.015,
+    "motor2_rate": 3.013,
+    "boat2_rate": 1.214,
+    "course_win_rate": 2.386,
+    "momentum": 1.979,
+    "mawari_time": 0.606,
+    "chokusen_time": 2.894,
+    "turn_master_bonus": 3.142,
+    "fl_f_penalty": 2.573
+  },
+  "before": {
+    "total": 240,
+    "avg_ll": -1.3797,
+    "top1_rate": 50.83,
+    "tri_rate": 49.58,
+    "b1_pred": 62.25,
+    "b1_actual": 50.83,
+    "b1_gap": 11.41,
+    "calibration": [
+      {
+        "range": "40-50%",
+        "count": 13,
+        "predicted": 46.7,
+        "actual": 30.8,
+        "gap": -16.0
+      },
+      {
+        "range": "50-60%",
+        "count": 71,
+        "predicted": 55.8,
+        "actual": 31.0,
+        "gap": -24.8
+      },
+      {
+        "range": "60-100%",
+        "count": 156,
+        "predicted": 66.5,
+        "actual": 61.5,
+        "gap": -4.9
+      }
+    ]
+  },
+  "after": {
+    "total": 240,
+    "avg_ll": -1.3181,
+    "top1_rate": 47.92,
+    "tri_rate": 50.0,
+    "b1_pred": 46.22,
+    "b1_actual": 50.83,
+    "b1_gap": -4.62,
+    "calibration": [
+      {
+        "range": "0-30%",
+        "count": 79,
+        "predicted": 16.6,
+        "actual": 35.4,
+        "gap": 18.9
+      },
+      {
+        "range": "30-40%",
+        "count": 32,
+        "predicted": 34.5,
+        "actual": 46.9,
+        "gap": 12.3
+      },
+      {
+        "range": "40-50%",
+        "count": 23,
+        "predicted": 43.3,
+        "actual": 30.4,
+        "gap": -12.9
+      },
+      {
+        "range": "50-60%",
+        "count": 24,
+        "predicted": 56.7,
+        "actual": 45.8,
+        "gap": -10.9
+      },
+      {
+        "range": "60-100%",
+        "count": 82,
+        "predicted": 77.1,
+        "actual": 74.4,
+        "gap": -2.7
+      }
+    ]
+  }
+}
