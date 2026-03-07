@@ -1312,7 +1312,7 @@ if app_mode == "予想":
         _lady_set = st.session_state.lady_racers or set()
         if _lady_set and "登録番号" in scored.columns:
             _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
-            display_df.loc[_lady_mask, "選手名"] = "♥ " + display_df.loc[_lady_mask, "選手名"].astype(str)
+            display_df.loc[_lady_mask, "選手名"] = '<span style="color:#ff0000;font-size:1.1em">♥</span> ' + display_df.loc[_lady_mask, "選手名"].astype(str)
 
         fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "蒲郡勝率": "{:.2f}"}
         if "M2連(%)" in display_df.columns:
@@ -1420,7 +1420,7 @@ if app_mode == "予想":
             # 女子選手にハートマーク
             if _lady_set and "登録番号" in scored.columns:
                 _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
-                ex_df.loc[_lady_mask, "選手名"] = "♥ " + ex_df.loc[_lady_mask, "選手名"].astype(str)
+                ex_df.loc[_lady_mask, "選手名"] = '<span style="color:#ff0000;font-size:1.1em">♥</span> ' + ex_df.loc[_lady_mask, "選手名"].astype(str)
 
             # フォーマット
             ex_fmt = {}
@@ -2103,23 +2103,31 @@ if app_mode == "予想":
                 polar=dict(
                     radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
                     angularaxis=dict(
-                        tickfont=dict(size=10, color="#7ab8e8"),
+                        tickfont=dict(size=9, color="#7ab8e8"),
                         rotation=90,
                         direction="clockwise",
                     ),
                     bgcolor="#0e1a2e",
                 ),
                 showlegend=True,
-                legend=dict(font=dict(color="#e8f4ff"), bgcolor="rgba(14,26,46,0.8)"),
+                legend=dict(
+                    font=dict(color="#e8f4ff", size=10),
+                    bgcolor="rgba(14,26,46,0.8)",
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.05,
+                    xanchor="center",
+                    x=0.5,
+                ),
                 paper_bgcolor="#0e1a2e",
-                margin=dict(l=60, r=60, t=40, b=40),
-                height=400,
+                margin=dict(l=80, r=80, t=50, b=60),
+                height=420,
             )
             return fig
 
         radar_fig = _make_radar_chart(scored)
         if radar_fig.data:
-            st.plotly_chart(radar_fig, use_container_width=True, config={"staticPlot": True})
+            st.plotly_chart(radar_fig, use_container_width=True, config={"displayModeBar": False})
         else:
             st.caption("レーダーチャートを表示するのに十分なデータがありません")
 
