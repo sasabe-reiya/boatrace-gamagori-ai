@@ -429,12 +429,14 @@ if app_mode == "予想":
     # ── レース設定パネル（メインエリア） ─────────────────────────────
     # プレースホルダーを使い、予想実行後に即座にたたむ（st.rerun()不要）
     _settings_ph = st.empty()
+    _form_ph = st.empty()
 
     _hide_settings = st.session_state.running or (
         not st.session_state.show_settings and st.session_state.result is not None
     )
     if _hide_settings:
         # 予想実行中 or 予想後で設定非表示: トグルボタンだけ表示
+        _form_ph.empty()
         with _settings_ph.container():
             if st.session_state.running:
                 _run_rno = st.session_state.get("_exec_race_no") or st.session_state.get("radio_race_no", 1)
@@ -474,6 +476,7 @@ if app_mode == "予想":
                     '</div>',
                     unsafe_allow_html=True,
                 )
+        with _form_ph.container():
             st.markdown(
                 """<style>
                 div[data-testid="stRadio"] > div[role="radiogroup"] {
@@ -556,6 +559,7 @@ if app_mode == "予想":
         st.session_state.show_settings = False
         st.session_state.running = True
         _settings_ph.empty()
+        _form_ph.empty()
         d_str = race_date.strftime("%Y%m%d")
         _run_date_fmt = race_date.strftime("%Y年%m月%d日") if hasattr(race_date, "strftime") else str(race_date)
         with _settings_ph.container():
@@ -2217,10 +2221,12 @@ else:
     }
 
     _shutsusou_settings_ph = st.empty()
+    _shutsusou_form_ph = st.empty()
 
     _hide_shutsusou_settings = st.session_state.running
 
     if _hide_shutsusou_settings:
+        _shutsusou_form_ph.empty()
         _s_run_date = st.session_state.get("_exec_shutsusou_date")
         _s_date_str = _s_run_date.strftime("%Y年%m月%d日") if _s_run_date and hasattr(_s_run_date, "strftime") else ""
         with _shutsusou_settings_ph.container():
@@ -2248,7 +2254,7 @@ else:
                 '</div>',
                 unsafe_allow_html=True,
             )
-
+        with _shutsusou_form_ph.container():
             _d_param_s = st.query_params.get("d")
             if _d_param_s:
                 try:
@@ -2278,6 +2284,7 @@ else:
             _shutsusou_run_from_state = True
 
     if fetch_shutsusou or _shutsusou_run_from_state:
+        _shutsusou_form_ph.empty()
         if _shutsusou_run_from_state:
             _shutsusou_settings_ph.empty()
             _s_date_str2 = shutsusou_date.strftime("%Y年%m月%d日") if hasattr(shutsusou_date, "strftime") else ""
