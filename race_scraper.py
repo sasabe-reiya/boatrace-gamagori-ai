@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 boatrace.jp から出走表・直前情報をスクレイピングするモジュール（複数会場対応）。
 【v3 追加機能】

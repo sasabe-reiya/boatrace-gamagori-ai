@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # ── 会場設定 ──────────────────────────────────────────────────────
 # 対応会場を VENUE_CONFIGS に定義。アクティブ会場は set_venue() で切り替える。
 

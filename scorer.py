@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 蒲郡競艇場専用スコアリングエンジン【強化版 v3】
 
