@@ -185,20 +185,7 @@ if "venue" not in st.query_params:
     st.stop()
 
 st.markdown("""
-<script>
-(function(){
-  function makeReadonly(){
-    document.querySelectorAll('[data-testid="stDateInput"] input').forEach(function(el){
-      if(!el.hasAttribute('readonly')){el.setAttribute('readonly','readonly');}
-    });
-  }
-  makeReadonly();
-  new MutationObserver(makeReadonly).observe(document.body,{childList:true,subtree:true});
-})();
-</script>
 <style>
-    /* ── 日付入力: カレンダー位置修正 ── */
-    [data-baseweb="popover"] { margin-top: 8px !important; }
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
     .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
@@ -524,7 +511,14 @@ if app_mode == "予想":
                     _default_date = date.today()
             else:
                 _default_date = date.today()
-            race_date = st.date_input("開催日", _default_date, disabled=_ui_disabled)
+            _date_options = [date.today() + timedelta(days=i) for i in range(-3, 8)]
+            _default_idx = 0
+            for _di, _dopt in enumerate(_date_options):
+                if _dopt == _default_date:
+                    _default_idx = _di
+                    break
+            race_date = st.selectbox("開催日", _date_options, index=_default_idx, disabled=_ui_disabled,
+                                     format_func=lambda d: d.strftime("%Y/%m/%d") + (" (今日)" if d == date.today() else ""))
             _d_val = race_date.strftime("%Y%m%d")
             if _d_val != st.query_params.get("d"):
                 st.query_params["d"] = _d_val
@@ -2300,7 +2294,14 @@ else:
             else:
                 _default_date_s = date.today()
 
-            shutsusou_date = st.date_input("開催日", _default_date_s, key="shutsusou_date_input", disabled=_ui_disabled)
+            _date_options_s = [date.today() + timedelta(days=i) for i in range(-3, 8)]
+            _default_idx_s = 0
+            for _di_s, _dopt_s in enumerate(_date_options_s):
+                if _dopt_s == _default_date_s:
+                    _default_idx_s = _di_s
+                    break
+            shutsusou_date = st.selectbox("開催日", _date_options_s, index=_default_idx_s, key="shutsusou_date_input", disabled=_ui_disabled,
+                                          format_func=lambda d: d.strftime("%Y/%m/%d") + (" (今日)" if d == date.today() else ""))
 
             def _on_shutsusou_click():
                 st.session_state.running = True
