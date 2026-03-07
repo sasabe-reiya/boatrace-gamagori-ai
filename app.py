@@ -31,7 +31,7 @@ from race_scraper import (
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
 )
-from scorer import predict
+from scorer import predict, get_wind_type
 from result_tracker import save_prediction
 
 # ── 結果キャッシュ（セッション喪失対策）──────────────────────────
@@ -932,7 +932,7 @@ if app_mode == "予想":
             weather_items = [
                 ("天気", w.get("天気", "-")),
                 ("波高", w.get("波高", "0cm")),
-                ("風向", w.get("風向", "-")),
+                ("風向", (lambda d, t: d + f'<br><span style="font-size:0.7rem;color:#f0a500">({t})</span>' if t != "-" else d)(w.get("風向", "-"), get_wind_type(w.get("風向", "-")))),
                 ("風速", w.get("風速", "0m")),
                 ("気温", w.get("気温", "-")),
                 ("水温", w.get("水温", "-")),
@@ -1578,6 +1578,104 @@ if app_mode == "予想":
                 f'<div class="exhibit-wrap" style="overflow-x:auto;">{ex_tbl_html}</div>',
                 unsafe_allow_html=True,
             )
+
+            # ── スタート展示図 ──────────────────────────────────────
+            _FRAME_BG_ST = {"1": "#fff", "2": "#000", "3": "#e74c3c",
+                            "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71"}
+            _FRAME_FG_ST = {"1": "#000", "2": "#fff", "3": "#fff",
+                            "4": "#fff", "5": "#000", "6": "#000"}
+            _has_st_display = (
+                "ST展示" in scored.columns
+                and scored["ST展示"].apply(lambda x: isinstance(x, str) and len(x) > 0).any()
+            )
+            if "進入コース" in scored.columns and (
+                scored["進入コース"].apply(lambda x: pd.notnull(x) and x > 0).any()
+            ):
+                _course_rows = []
+                for _, _row in scored.iterrows():
+                    _waku = str(int(_row["枠番"]))
+                    _course = int(_row["進入コース"]) if pd.notna(_row.get("進入コース")) and int(_row.get("進入コース", 0)) > 0 else int(_waku)
+                    _st_val = str(_row.get("ST展示", "")) if "ST展示" in scored.columns else ""
+                    _course_rows.append({"waku": _waku, "course": _course, "st": _st_val})
+                _course_rows.sort(key=lambda r: r["course"])
+
+                def _parse_st_val(st_str):
+                    if not st_str:
+                        return None
+                    s = st_str.strip()
+                    is_f = s.upper().startswith("F")
+                    if is_f:
+                        s = s[1:]
+                    try:
+                        val = float(s)
+                        return -val if is_f else val
+                    except ValueError:
+                        return None
+
+                _st_vals = [_parse_st_val(r["st"]) for r in _course_rows]
+                _max_st = max((v for v in _st_vals if v is not None and v > 0), default=0.20)
+                if _max_st <= 0:
+                    _max_st = 0.20
+
+                _sd_html = (
+                    '<div style="background:linear-gradient(180deg,#0a1628 0%,#122040 100%);'
+                    'border-radius:8px;padding:12px 16px;margin-top:12px;position:relative;">'
+                    '<div style="margin-bottom:8px;">'
+                    '<span style="color:#7ab8e8;font-size:0.8rem;font-weight:bold;">スタート展示</span>'
+                    '</div>'
+                )
+
+                for cr in _course_rows:
+                    w = cr["waku"]
+                    st_str = cr["st"]
+                    st_sec = _parse_st_val(st_str)
+                    bg = _FRAME_BG_ST.get(w, "#666")
+                    fg = _FRAME_FG_ST.get(w, "#fff")
+                    border = "border:1.5px solid #666;" if w == "1" else ""
+                    is_flying = st_str.strip().upper().startswith("F") if st_str else False
+
+                    if st_sec is not None and _has_st_display:
+                        if st_sec < 0:
+                            right_pct = 0
+                        else:
+                            right_pct = 10 + max(0, min(75, (st_sec / _max_st) * 65))
+                    else:
+                        right_pct = 50
+
+                    if st_str and _has_st_display:
+                        if is_flying:
+                            st_color = "#ff4444"
+                            st_label = f"F{st_str.strip()[1:]}"
+                        else:
+                            st_color = "#e8f4ff"
+                            st_label = st_str.strip()
+                    else:
+                        st_color = "#5a7a9e"
+                        st_label = "-"
+
+                    _sd_html += (
+                        f'<div style="position:relative;height:34px;margin:1px 0;'
+                        f'border-bottom:1px solid rgba(30,95,168,0.15);">'
+                        # ボート + ST値をセットで配置
+                        f'<div style="position:absolute;right:{right_pct}%;top:50%;transform:translateY(-50%);'
+                        f'display:flex;align-items:center;gap:4px;">'
+                        f'<span style="font-size:0.75rem;font-weight:bold;color:{st_color};'
+                        f'white-space:nowrap;">{st_label}</span>'
+                        f'<div style="width:24px;height:24px;border-radius:50%;background:{bg};{border}'
+                        f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
+                        f'font-size:0.75rem;font-weight:bold;color:{fg};'
+                        f'box-shadow:0 1px 3px rgba(0,0,0,0.4);">{w}</div>'
+                        f'</div>'
+                        f'</div>'
+                    )
+
+                # スリット線
+                _sd_html += (
+                    '<div style="position:absolute;right:8%;top:38px;bottom:12px;width:1.5px;'
+                    'background:rgba(255,255,255,0.25);pointer-events:none;"></div>'
+                )
+                _sd_html += '</div>'
+                st.markdown(_sd_html, unsafe_allow_html=True)
 
         st.markdown("---")
 

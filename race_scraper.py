@@ -428,11 +428,13 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             for k in ("天気", "風速", "風向", "波高", "気温", "水温"):
                 weather[k] = sw[k]
 
-    # ── 展示進入コース解析 ──────────────────────────
+    # ── 展示進入コース・ST展示タイム解析 ──────────────────────────
     # table1_boatImage1 セクションにスタート展示の進入コース順が表示される
     # 上から順にコース1, コース2, ... コース6
     # 各div内の table1_boatImage1Number に枠番が記載
+    # 各div内の table1_boatImage1Time にST展示タイムが記載
     course_map = {}  # {枠番文字列: 進入コース番号}
+    st_display = {}  # {枠番文字列: ST展示タイム文字列} (例: ".02", "F.03")
     boat_divs = soup.find_all("div", class_="table1_boatImage1")
     for course_idx, div in enumerate(boat_divs, start=1):
         num_span = div.find("span", class_=re.compile(r"table1_boatImage1Number"))
@@ -440,6 +442,12 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             f_no = num_span.get_text(strip=True)
             if f_no in ["1", "2", "3", "4", "5", "6"]:
                 course_map[f_no] = course_idx
+                # ST展示タイム取得
+                time_span = div.find("span", class_=re.compile(r"table1_boatImage1Time"))
+                if time_span:
+                    st_text = time_span.get_text(strip=True)
+                    if st_text:
+                        st_display[f_no] = st_text
 
     # ── 展示タイム解析 ───────────────────────────
     # テーブルの行順 = 枠番順（1号艇、2号艇、...）
@@ -464,6 +472,7 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
                             "展示タイム":  et,
                             "チルト":     tilt,
                             "進入コース":  course_map.get(f_no, int(f_no)),
+                            "ST展示":     st_display.get(f_no, ""),
                             "周回タイム":  None,
                         })
             break
