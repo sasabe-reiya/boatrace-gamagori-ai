@@ -933,22 +933,27 @@ if app_mode == "予想":
             # 展示進入が枠番通りでない場合
             if "進入コース" in scored.columns:
                 _entry_diff = False
-                _entry_parts = []
+                _course_to_boat = {}
                 for _, _row in scored.iterrows():
                     _waku = int(_row.get("枠番", 0))
                     _course = _row.get("進入コース")
-                    if pd.notna(_course) and int(_course) > 0 and int(_course) != _waku:
-                        _entry_diff = True
-                    _entry_parts.append(str(int(_course)) if pd.notna(_course) and int(_course) > 0 else str(_waku))
+                    if pd.notna(_course) and int(_course) > 0:
+                        _c = int(_course)
+                        if _c != _waku:
+                            _entry_diff = True
+                        _course_to_boat[_c] = _waku
+                    else:
+                        _course_to_boat[_waku] = _waku
                 if _entry_diff:
-                    _entry_str = " - ".join(_entry_parts)
+                    _entry_order = [str(_course_to_boat.get(c, c)) for c in range(1, 7)]
+                    _entry_str = " - ".join(_entry_order)
                     _badges_html += (
                         '<div style="margin-top:6px">'
                         '<span style="background:#ff6f00;color:#fff;padding:3px 14px;'
                         'border-radius:12px;font-size:0.85rem;font-weight:bold;'
                         'letter-spacing:1px">進入変化</span>'
                         f'<span style="color:#ffab40;font-size:0.8rem;margin-left:8px">'
-                        f'展示進入: {_entry_str}</span></div>'
+                        f'進入順: {_entry_str}</span></div>'
                     )
             if _badges_html:
                 weather_html += _badges_html
@@ -1456,7 +1461,7 @@ if app_mode == "予想":
                         return "-"
                     c = int(x)
                     w = _waku_list[idx]
-                    return f"{w}→{c}" if c != w else f"{c}"
+                    return f"{c}" if c == w else f"{c}コース"
                 ex_df["展示進入"] = [
                     _fmt_shinnyuu(i, v) for i, v in enumerate(ex_df["展示進入"])
                 ]
@@ -1489,7 +1494,7 @@ if app_mode == "予想":
 
             # 展示進入が枠番と異なるセルをオレンジでハイライト
             if "展示進入" in ex_df.columns:
-                _shinnyuu_diff = ["→" in str(v) for v in ex_df["展示進入"]]
+                _shinnyuu_diff = ["コース" in str(v) for v in ex_df["展示進入"]]
                 def _style_shinnyuu(col):
                     return [
                         "background-color: rgba(255,111,0,0.55); color: #fff; font-weight: bold; text-shadow: 0 0 4px rgba(255,160,0,0.7)"
