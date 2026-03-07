@@ -188,8 +188,15 @@ st.markdown("""
 <style>
     /* ── ツールバー・フッター非表示 ── */
     header[data-testid="stHeader"] { display: none !important; }
-    footer { display: none !important; }
+    footer { display: none !important; visibility: hidden !important; height: 0 !important; }
+    footer a { display: none !important; }
     [data-testid="stDecoration"] { display: none !important; }
+    [data-testid="stStatusWidget"] { display: none !important; }
+    .viewerBadge_container__r5tak { display: none !important; }
+    .stApp > footer { display: none !important; }
+    #MainMenu { display: none !important; }
+    div[class*="StatusWidget"] { display: none !important; }
+    a[href*="streamlit.io"] { display: none !important; }
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
     .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
