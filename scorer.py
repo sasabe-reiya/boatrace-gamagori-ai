@@ -99,15 +99,37 @@ def _get_course_win_rate():
 # 後方互換用（直接参照している箇所用のフォールバック）
 GAMAGORI_COURSE_WIN_RATE = [0.555, 0.095, 0.115, 0.095, 0.085, 0.055]
 
-# 蒲郡の地理: 南西の風=向かい風, 北東の風=追い風
 # セオリー: 向かい風→1マークで減速→まくり決まりやすい→ダッシュ有利
 #           追い風→スピード出る→先マイしやすい→イン有利
-WIND_COURSE_EFFECT = {
+
+# 蒲郡の地理: 北東の風=追い風, 南西の風=向かい風
+_WIND_EFFECT_GAMAGORI = {
+    "北":     {0: +1.5, 1: +0.5, 2: -0.3, 3: -0.8, 4: -1.2, 5: -1.0},
+    "北北東":  {0: +1.8, 1: +0.5, 2: -0.5, 3: -1.2, 4: -1.5, 5: -1.0},
+    "北東":   {0: +2.0, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.5, 5: -1.0},
+    "東北東":  {0: +1.5, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.2, 5: -0.8},
+    "東":     {0: +0.5, 1: +0.5, 2: -0.8, 3: -1.5, 4: -0.8, 5:  0.0},
+    "東南東":  {0:  0.0, 1: -0.3, 2: -0.5, 3:  0.0, 4: +0.5, 5: +0.5},
+    "南東":   {0: -0.5, 1: -0.5, 2:  0.0, 3: +0.5, 4: +0.8, 5: +1.0},
+    "南南東":  {0: -1.0, 1: -0.5, 2: +0.3, 3: +0.8, 4: +1.0, 5: +1.5},
+    "南":     {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.5},
+    "南南西":  {0: -1.8, 1: -0.8, 2: +0.5, 3: +1.2, 4: +1.5, 5: +1.8},
+    "南西":   {0: -2.0, 1: -1.0, 2: +0.5, 3: +1.5, 4: +1.5, 5: +2.0},
+    "西南西":  {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.5},
+    "西":     {0: -0.5, 1: -1.0, 2: -0.5, 3:  0.0, 4: +0.5, 5: +0.5},
+    "西北西":  {0:  0.0, 1: -0.5, 2: -0.5, 3: -0.3, 4: -0.5, 5: -0.3},
+    "北西":   {0: +0.5, 1:  0.0, 2: -0.3, 3: -0.5, 4: -0.8, 5: -0.5},
+    "北北西":  {0: +1.0, 1: +0.3, 2: -0.3, 3: -0.8, 4: -1.0, 5: -0.8},
+    "-":      {0:  0.0, 1:  0.0, 2:  0.0, 3:  0.0, 4:  0.0, 5:  0.0},
+}
+
+# 住之江の地理: 北の風=追い風, 南の風=向かい風
+_WIND_EFFECT_SUMINOE = {
     "北":     {0: +2.0, 1: +0.5, 2: -0.5, 3: -1.0, 4: -1.5, 5: -1.0},
-    "北北東":  {0: +1.5, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.2, 5: -0.8},
-    "北東":   {0: +1.0, 1: +0.5, 2: -0.5, 3: -1.5, 4: -1.0, 5: -0.5},
-    "東北東":  {0: +0.5, 1: +0.5, 2: -0.8, 3: -1.5, 4: -0.8, 5:  0.0},
-    "東":     {0:  0.0, 1: +0.5, 2: -1.0, 3: -1.5, 4: -0.5, 5: +0.5},
+    "北北東":  {0: +1.5, 1: +0.5, 2: -0.5, 3: -1.0, 4: -1.2, 5: -0.8},
+    "北東":   {0: +1.0, 1: +0.5, 2: -0.5, 3: -1.0, 4: -0.8, 5: -0.5},
+    "東北東":  {0: +0.5, 1: +0.5, 2: -0.8, 3: -0.5, 4: -0.5, 5:  0.0},
+    "東":     {0:  0.0, 1: +0.5, 2: -1.0, 3: -0.5, 4:  0.0, 5: +0.5},
     "東南東":  {0: -0.5, 1: -0.3, 2: -0.5, 3:  0.0, 4: +0.5, 5: +1.0},
     "南東":   {0: -1.0, 1: -0.5, 2:  0.0, 3: +0.5, 4: +1.0, 5: +1.5},
     "南南東":  {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.8},
@@ -115,12 +137,21 @@ WIND_COURSE_EFFECT = {
     "南南西":  {0: -1.5, 1: -0.8, 2: +0.3, 3: +0.8, 4: +1.2, 5: +1.5},
     "南西":   {0: -1.0, 1: -0.5, 2:  0.0, 3: +0.5, 4: +1.0, 5: +1.5},
     "西南西":  {0: -0.5, 1: -0.3, 2: -0.5, 3:  0.0, 4: +0.5, 5: +1.0},
-    "西":     {0:  0.0, 1: -1.0, 2: -0.8, 3:  0.0, 4:  0.0, 5:  0.0},
-    "西北西":  {0: +0.5, 1: -1.0, 2: -0.5, 3: -0.3, 4: -0.5, 5: -0.5},
+    "西":     {0:  0.0, 1: -0.5, 2: -1.0, 3: -0.5, 4:  0.0, 5: +0.5},
+    "西北西":  {0: +0.5, 1: -0.5, 2: -0.5, 3: -0.3, 4: -0.5, 5: -0.5},
     "北西":   {0: +1.0, 1:  0.0, 2: -0.3, 3: -0.5, 4: -0.8, 5: -0.8},
     "北北西":  {0: +1.5, 1: +0.3, 2: -0.3, 3: -0.8, 4: -1.2, 5: -1.0},
     "-":      {0:  0.0, 1:  0.0, 2:  0.0, 3:  0.0, 4:  0.0, 5:  0.0},
 }
+
+def _get_wind_effect() -> dict:
+    """現在の会場に応じた風向×コース効果テーブルを返す。"""
+    if _cfg.JYCD == "12":
+        return _WIND_EFFECT_SUMINOE
+    return _WIND_EFFECT_GAMAGORI
+
+# 後方互換
+WIND_COURSE_EFFECT = _WIND_EFFECT_GAMAGORI
 
 
 # ────────────────────────────────────────────────────────────────
@@ -418,8 +449,9 @@ def calculate_scores(
     wind_dir = weather.get("風向", "-")
     is_calm  = wind_speed <= G["calm_wind_threshold"]
 
-    if not is_calm and wind_dir in WIND_COURSE_EFFECT:
-        effect = WIND_COURSE_EFFECT[wind_dir]
+    wind_effect_table = _get_wind_effect()
+    if not is_calm and wind_dir in wind_effect_table:
+        effect = wind_effect_table[wind_dir]
         wind_multiplier = min(wind_speed / 3.0, 3.0)
         for i in range(n):
             scores[i] += effect.get(course_positions[i], 0.0) * wind_multiplier
@@ -733,21 +765,23 @@ def _build_reasons(
             elif ci >= 4:
                 r.append("安定板→外枠不利")
 
-        # コース特性
+        # コース特性（風向効果テーブルから追い風/向かい風を自動判定）
+        _wt = _get_wind_effect()
+        _wind_in_eff = _wt.get(wind_dir, {}).get(0, 0.0)
         if ci == 0:
             if is_calm:
                 r.append("無風→イン安定")
-            elif wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
+            elif _wind_in_eff < -0.5 and wind_speed >= 2:
                 r.append(f"向い風({wind_speed}m)→まくり注意")
-            elif wind_dir in ["北", "北北東", "北東", "北北西", "北西"] and wind_speed >= 2:
+            elif _wind_in_eff > 0.5 and wind_speed >= 2:
                 r.append(f"追い風({wind_speed}m)→逃げ有利")
             if is_night:
                 r.append("ナイター→イン補正")
 
-        if ci == 1 and wind_dir in ["東", "東南東", "東北東"] and wind_speed >= 2:
+        if ci == 1 and abs(_wind_in_eff) <= 0.5 and _wt.get(wind_dir, {}).get(1, 0.0) > 0 and wind_speed >= 2:
             r.append(f"横風({wind_dir})→差し有利")
 
-        if ci in [2, 3] and wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
+        if ci in [2, 3] and _wind_in_eff < -0.5 and wind_speed >= 2:
             r.append(f"{'まくり差し' if ci==2 else 'カドまくり'}条件")
 
         # 展示タイム
@@ -1230,7 +1264,7 @@ def generate_tenkai_prediction(
         nige_score += st_adv * W.get("tenkai_st_factor", 2.0)
 
     # 風向効果
-    wind_eff = WIND_COURSE_EFFECT.get(wind_dir, {}).get(0, 0.0)
+    wind_eff = _get_wind_effect().get(wind_dir, {}).get(0, 0.0)
     wind_mult = min(wind_speed / 3.0, 2.0)
     nige_score += wind_eff * wind_mult * W.get("tenkai_wind_factor", 0.05)
 
@@ -1303,7 +1337,9 @@ def generate_tenkai_prediction(
                 if st_vals[c1_idx] > mean_st + 0.01:
                     sashi_score *= 1.2
             # 横風→コース2差し有利
-            if cp == 1 and wind_dir in ["東", "東南東", "東北東"] and wind_speed >= 2:
+            _wt_tenkai = _get_wind_effect()
+            _w_in = _wt_tenkai.get(wind_dir, {}).get(0, 0.0)
+            if cp == 1 and abs(_w_in) <= 0.5 and _wt_tenkai.get(wind_dir, {}).get(1, 0.0) > 0 and wind_speed >= 2:
                 sashi_score *= 1.15
 
             if sashi_score > 0.02:
@@ -1331,7 +1367,8 @@ def generate_tenkai_prediction(
                     makuri_score *= 1.2
             if tilts[idx] < -0.5:
                 makuri_score *= 1.15
-            if wind_dir in ["南", "南南西", "南西", "南南東", "南東"] and wind_speed >= 2:
+            _w_in_makuri = _get_wind_effect().get(wind_dir, {}).get(0, 0.0)
+            if _w_in_makuri < -0.5 and wind_speed >= 2:
                 makuri_score *= 1.1
             if cp == 3:  # カドまくり
                 makuri_score *= 1.2

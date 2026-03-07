@@ -8,7 +8,6 @@
 """
 import sys
 import os
-import hashlib
 import json
 import pandas as pd
 import numpy as np
@@ -155,45 +154,41 @@ if not _device_id:
     }})();
     </script>""", height=0)
 
-# ── パスワード認証 ──────────────────────────────────────────────────
-APP_PASSWORD = "sasabe"
-_AUTH_TOKEN = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()[:16]
+# ── 会場選択ページ ────────────────────────────────────────────────
+# query_params に venue が無い場合、会場選択画面を表示してメインに進まない
+if "venue" not in st.query_params:
+    st.markdown("""
+    <style>
+        section[data-testid="stSidebar"],
+        button[data-testid="stSidebarCollapsedControl"],
+        button[data-testid="collapsedControl"] { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
-def check_password():
-    """パスワード認証。正しいパスワードが入力されるまでアプリを表示しない。
-    認証後はURLにトークンを付与し、リロードしても再入力不要にする。"""
-    if st.session_state.get("authenticated"):
-        return True
+    st.markdown('''<div style="background:linear-gradient(135deg,#060e1f 0%,#0d2855 40%,#1a3a6b 70%,#0d2855 100%);
+        padding:1.5rem;border-radius:12px;border:1px solid #1e5fa8;margin-top:2.5rem;text-align:center">
+        <h1 style="color:#e8f4ff;font-size:1.3rem;letter-spacing:2px;margin:0">競艇予想AI レイヤドン</h1>
+        <div style="color:#5a9fd4;font-size:0.65rem;letter-spacing:4px;margin-top:4px">― BOATRACE AI ―</div>
+    </div>''', unsafe_allow_html=True)
 
-    # URLのトークンで自動認証（リロード時）
-    if st.query_params.get("token") == _AUTH_TOKEN:
-        st.session_state["authenticated"] = True
-        return True
+    st.markdown("")
+    st.markdown("##### レース場を選択してください")
+    st.markdown("")
 
-    st.markdown(
-        '<div style="max-width:400px;margin:80px auto;text-align:center">'
-        '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">🔱 競艇予想AI レイヤドン</h2>'
-        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">― BOATRACE AI ―</p>'
-        '<p style="color:#7ab8e8">アクセスにはパスワードが必要です</p>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.form("login_form"):
-        password = st.text_input("パスワード", type="password", placeholder="パスワードを入力")
-        submitted = st.form_submit_button("ログイン", use_container_width=True, type="primary")
-
-    if submitted:
-        if password == APP_PASSWORD:
-            st.session_state["authenticated"] = True
-            st.query_params["token"] = _AUTH_TOKEN
-            st.rerun()
-        else:
-            st.error("パスワードが正しくありません")
-
-    return False
-
-if not check_password():
+    _vs_cols = st.columns(len(VENUE_CONFIGS))
+    for i, (code, vcfg) in enumerate(VENUE_CONFIGS.items()):
+        with _vs_cols[i]:
+            st.markdown(
+                f'<div style="background:#1a2744;border:1px solid #2a4a80;border-radius:12px;'
+                f'padding:1.2rem 0.8rem;text-align:center;margin-bottom:0.5rem">'
+                f'<div style="font-size:1.5rem;font-weight:bold;color:#e8f4ff">{vcfg["short_name"]}</div>'
+                f'<div style="font-size:0.7rem;color:#5a9fd4;margin-top:4px">{vcfg["en_name"]}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button(f'{vcfg["short_name"]}で予想', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
+                st.query_params["venue"] = code
+                st.rerun()
     st.stop()
 
 st.markdown("""
@@ -361,22 +356,23 @@ if "running" not in st.session_state:
     st.session_state.running = False
 _ui_disabled = st.session_state.running
 
-# ── 会場選択 ──────────────────────────────────────────────────────
-_venue_options = {v["name"]: k for k, v in VENUE_CONFIGS.items()}
-_venue_cols = st.columns([1, 1])
-with _venue_cols[0]:
-    _selected_venue_name = st.selectbox(
-        "会場", list(_venue_options.keys()),
-        index=list(_venue_options.values()).index(st.query_params.get("venue", "07")),
-        disabled=_ui_disabled,
-        key="venue_select",
-        label_visibility="collapsed",
-    )
-_selected_venue_code = _venue_options[_selected_venue_name]
-if _selected_venue_code != st.query_params.get("venue", "07"):
-    st.query_params["venue"] = _selected_venue_code
+# ── 会場設定（query_params から読み取り）─────────────────────────
+_selected_venue_code = st.query_params.get("venue", "07")
 set_venue(_selected_venue_code)
 _venue = get_venue_config()
+
+# ── 会場名 + 変更ボタン + モード切替 ──────────────────────────────
+_hdr_cols = st.columns([3, 1])
+with _hdr_cols[0]:
+    st.markdown(
+        f'<div style="font-size:1rem;font-weight:bold;color:#7ab8e8;padding:6px 0">'
+        f'{_venue["short_name"]} ボートレース</div>',
+        unsafe_allow_html=True,
+    )
+with _hdr_cols[1]:
+    if st.button("会場変更", disabled=_ui_disabled, use_container_width=True):
+        del st.query_params["venue"]
+        st.rerun()
 
 app_mode = st.radio(
     "モード", ["予想", "出走表一覧"], horizontal=True,
@@ -1045,12 +1041,12 @@ if app_mode == "予想":
                 for ch in _raw_combo:
                     if ch.isdigit():
                         _cbg = _FBG.get(ch, "#555")
-                        _cfg = _FFG.get(ch, "#fff")
+                        _cfgc = _FFG.get(ch, "#fff")
                         _cbdr = "border:1px solid #888;" if ch == "1" else ""
                         _combo_display += (
                             f'<span style="display:inline-block;width:20px;height:20px;'
                             f'line-height:20px;text-align:center;border-radius:3px;'
-                            f'background:{_cbg};color:{_cfg};{_cbdr}font-weight:bold;'
+                            f'background:{_cbg};color:{_cfgc};{_cbdr}font-weight:bold;'
                             f'font-size:0.8rem;margin:0 1px">{ch}</span>'
                         )
                     else:

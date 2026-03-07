@@ -256,6 +256,59 @@ def fetch_gamagori_weather() -> dict | None:
 
 
 # ─────────────────────────────────────────────
+# 1.6  住之江競艇リアルタイム気象データ取得（公式サイト）
+# ─────────────────────────────────────────────
+_SUMINOE_WEATHER_URL = "https://www.boatrace-suminoe.jp/asp/kyogi/12/pc/sub_inf.htm"
+
+def fetch_suminoe_weather() -> dict | None:
+    """住之江競艇公式サイトから気象データを取得する。
+    失敗時は None を返す。"""
+    try:
+        resp = requests.get(_SUMINOE_WEATHER_URL, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "html.parser")
+
+        weather_div = soup.find("div", id="weather")
+        if not weather_div:
+            return None
+
+        # テーブルから th/td ペアを読み取る
+        ths = [th.get_text(strip=True) for th in weather_div.find_all("th")]
+        tds = weather_div.find_all("td")
+        if len(ths) < 6 or len(tds) < 6:
+            return None
+
+        data = {}
+        for i, th in enumerate(ths):
+            td = tds[i]
+            # 風向セルは <br><span>(追い風)</span> を含むので最初のテキストノードだけ取る
+            if th == "風向":
+                # td内の直接テキスト（"北" 等）を取得（spanの中身は除外）
+                text_parts = []
+                for child in td.children:
+                    if isinstance(child, str):
+                        t = child.strip()
+                        if t:
+                            text_parts.append(t)
+                    elif child.name != "span" and child.name != "br":
+                        text_parts.append(child.get_text(strip=True))
+                data[th] = text_parts[0] if text_parts else td.get_text(strip=True)
+            else:
+                data[th] = td.get_text(strip=True)
+
+        return {
+            "天気": data.get("天候", "-"),
+            "風向": data.get("風向", "-"),
+            "風速": data.get("風速", "-"),
+            "波高": data.get("波高", "-"),
+            "気温": data.get("気温", "-"),
+            "水温": data.get("水温", "-"),
+        }
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────
 # 2. 直前情報取得 (風向・展示タイム)
 # ─────────────────────────────────────────────
 def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.DataFrame, dict]:
@@ -367,6 +420,13 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             for k in ("風速", "風向", "気温", "水温", "湿度", "気圧"):
                 weather[k] = gw[k]
 
+    # ── 住之江公式リアルタイム気象で上書き（住之江のみ）──────────
+    if _cfg.get_venue_config().get("has_official_weather"):
+        sw = fetch_suminoe_weather()
+        if sw:
+            for k in ("天気", "風速", "風向", "波高", "気温", "水温"):
+                weather[k] = sw[k]
+
     # ── 展示進入コース解析 ──────────────────────────
     # table1_boatImage1 セクションにスタート展示の進入コース順が表示される
     # 上から順にコース1, コース2, ... コース6
@@ -410,6 +470,16 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
     return pd.DataFrame(rows), weather
 
 
+def _submit_original_exhibit(executor, venue_cfg: dict, race_no: int, date_str: str):
+    """会場に応じたオリジナル展示タイム取得タスクを submit する。"""
+    if not venue_cfg.get("has_original_exhibit"):
+        return None
+    code = venue_cfg.get("code", "")
+    if code == "12":
+        return executor.submit(fetch_suminoe_time, race_no, date_str)
+    return executor.submit(fetch_gamagori_time, race_no, date_str)
+
+
 # ─────────────────────────────────────────────
 # 3. 統合
 # ─────────────────────────────────────────────
@@ -436,11 +506,11 @@ def fetch_full_race_data(
     with ThreadPoolExecutor(max_workers=3) as executor:
         f_soup  = executor.submit(_fetch_racelist_soup, race_no, date_str)
         f_before = executor.submit(fetch_before_info, race_no, date_str)
-        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str) if _venue.get("has_original_exhibit") else None
+        f_exhibit = _submit_original_exhibit(executor, _venue, race_no, date_str)
 
         racelist_soup = f_soup.result()
         ex_df, weather = f_before.result()
-        gama_time_df = f_gama.result() if f_gama else pd.DataFrame()
+        gama_time_df = f_exhibit.result() if f_exhibit else pd.DataFrame()
 
     # ── 出走表をsoupからパース（HTTPリクエストなし） ──────
     card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
@@ -521,11 +591,11 @@ def fetch_base_race_data(
     with ThreadPoolExecutor(max_workers=3) as executor:
         f_soup   = executor.submit(_fetch_racelist_soup, race_no, date_str)
         f_before = executor.submit(fetch_before_info, race_no, date_str)
-        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str) if _venue.get("has_original_exhibit") else None
+        f_exhibit = _submit_original_exhibit(executor, _venue, race_no, date_str)
 
         racelist_soup = f_soup.result()
         ex_df, weather = f_before.result()
-        gama_time_df = f_gama.result() if f_gama else pd.DataFrame()
+        gama_time_df = f_exhibit.result() if f_exhibit else pd.DataFrame()
 
     card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
     if card_df.empty:
@@ -1340,6 +1410,82 @@ def fetch_gamagori_time(race_no: int, date_str: str | None = None) -> pd.DataFra
             "一周タイム":     isshu,
             "まわり足タイム": mawari,
             "直線タイム":     chokusen,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ─────────────────────────────────────────────
+# 11b. 住之江公式サイト：オリジナル展示タイム取得
+# ─────────────────────────────────────────────
+
+SUMINOE_EXHIBIT_URL = "https://www.boatrace-suminoe.jp/asp/kyogi/12/pc"
+
+
+def fetch_suminoe_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:
+    """
+    住之江競艇公式サイトのオリジナル展示ページから展示タイムデータを取得する。
+
+    データソース: /asp/kyogi/12/pc/st02{RR}.htm
+    boatrace.jp にない住之江独自計測データ（一周・まわり足）を含む。
+
+    テーブル構造（rowspan=2の2行構成×6艇）:
+      [0]枠 [1]選手名 [2]体重 [3]チルト [4]展示 [5]一周 [6]まわり足
+
+    Returns
+    -------
+    DataFrame with columns: 枠番, 展示タイム_gama, 一周タイム, まわり足タイム, 直線タイム
+    ※ 直線タイムは住之江では計測なしのため常にNone。
+    空DataFrameの場合はデータ取得失敗。
+    """
+    url = f"{SUMINOE_EXHIBIT_URL}/st02{race_no:02d}.htm"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except Exception as e:
+        print(f"[suminoe] 展示データ取得失敗 {url}: {e}")
+        return pd.DataFrame()
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    tbl = soup.find("table", class_="table_solo")
+    if not tbl:
+        return pd.DataFrame()
+
+    rows = []
+    for tbody in tbl.find_all("tbody"):
+        trs = tbody.find_all("tr")
+        if not trs:
+            continue
+        first_tr = trs[0]
+        tds = first_tr.find_all("td")
+        if len(tds) < 7:
+            continue
+
+        # td[0]=枠番(waku01等), td[1]=選手名, td[2]=体重, td[3]=チルト, td[4]=展示, td[5]=一周, td[6]=まわり足
+        waku_td = tds[0]
+        waku_class = waku_td.get("class", [])
+        waku = None
+        for cls in waku_class:
+            m = re.search(r'waku0?(\d)', cls)
+            if m:
+                waku = m.group(1)
+                break
+        if not waku:
+            waku = waku_td.get_text(strip=True)
+        if waku not in ("1", "2", "3", "4", "5", "6"):
+            continue
+
+        tenji = _to_float(tds[4].get_text())
+        isshu = _to_float(tds[5].get_text())
+        mawari = _to_float(tds[6].get_text())
+
+        rows.append({
+            "枠番":          waku,
+            "展示タイム_gama": tenji,
+            "一周タイム":     isshu,
+            "まわり足タイム": mawari,
+            "直線タイム":     None,
         })
 
     return pd.DataFrame(rows)

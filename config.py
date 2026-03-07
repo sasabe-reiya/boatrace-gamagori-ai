@@ -68,7 +68,7 @@ _SCORE_WEIGHTS_BASE = {
 }
 
 # ══════════════════════════════════════════════════════════════════
-#  蒲郡（ナイター）
+#  蒲郡
 # ══════════════════════════════════════════════════════════════════
 _GAMAGORI_SETTINGS = {
     "night_race_start":       9,
@@ -125,7 +125,7 @@ _SUMINOE_SCORE_WEIGHTS.update({
 VENUE_CONFIGS = {
     "07": {
         "code": "07",
-        "name": "蒲郡（ナイター）",
+        "name": "蒲郡",
         "short_name": "蒲郡",
         "en_name": "GAMAGORI BOATRACE",
         "settings": _GAMAGORI_SETTINGS,
@@ -136,25 +136,26 @@ VENUE_CONFIGS = {
         "has_iot_weather": True,         # IoTリアルタイム気象API
         "official_site": "https://www.gamagori-kyotei.com/asp/gamagori/kyogi/kyogihtml",
     },
-    "04": {
-        "code": "04",
+    "12": {
+        "code": "12",
         "name": "住之江",
         "short_name": "住之江",
         "en_name": "SUMINOE BOATRACE",
         "settings": _SUMINOE_SETTINGS,
         "course_stats": _SUMINOE_COURSE_STATS,
         "score_weights": _SUMINOE_SCORE_WEIGHTS,
-        "has_original_exhibit": False,
+        "has_original_exhibit": True,     # 住之江独自展示タイム（一周・まわり足）
         "has_taka_yoso": False,
         "has_iot_weather": False,
-        "official_site": None,
+        "has_official_weather": True,    # 住之江公式サイト気象データ
+        "official_site": "https://www.boatrace-suminoe.jp/asp/suminoe/kyogi/kyogihtml",
     },
 }
 
 # ── アクティブ会場（後方互換用グローバル変数）─────────────────────
 # app.py から set_venue() で切り替え。デフォルトは蒲郡。
 JYCD = "07"
-JYNAME = "蒲郡（ナイター）"
+JYNAME = "蒲郡"
 GAMAGORI_SETTINGS = _GAMAGORI_SETTINGS
 GAMAGORI_COURSE_STATS = _GAMAGORI_COURSE_STATS
 SCORE_WEIGHTS = dict(_GAMAGORI_SCORE_WEIGHTS)
