@@ -197,6 +197,12 @@ st.markdown("""
     #MainMenu { display: none !important; }
     div[class*="StatusWidget"] { display: none !important; }
     a[href*="streamlit.io"] { display: none !important; }
+    /* ── pills改行制御 ── */
+    .st-key-race_no_pills_wrap [role="tablist"] { flex-wrap: wrap !important; }
+    .st-key-race_no_pills_wrap [role="tablist"] > button:nth-child(6) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap [role="tablist"] { flex-wrap: wrap !important; }
+    .st-key-date_pills_wrap [role="tablist"] > button:nth-child(3) { margin-right: 100% !important; }
+    .st-key-date_pills_wrap [role="tablist"] > button:nth-child(4) { margin-right: 100% !important; }
     /* ── ベーススタイル ─────────────────────────────────── */
     .main-header { background: linear-gradient(135deg, #060e1f 0%, #0d2855 40%, #1a3a6b 70%, #0d2855 100%); padding: 1.2rem 1.2rem 1rem; border-radius: 12px; margin-bottom: 0.8rem; border: 1px solid #1e5fa8; margin-top: 2.5rem; position: relative; overflow: hidden; }
     .main-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at 20% 80%, rgba(30,95,168,0.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(100,180,255,0.08) 0%, transparent 50%); pointer-events: none; }
@@ -513,7 +519,8 @@ if app_mode == "予想":
             # session_state 初期化（初回のみ query_params から復元）
             if "radio_race_no" not in st.session_state:
                 st.session_state.radio_race_no = max(1, min(12, int(st.query_params.get("race", 1))))
-            race_no   = st.pills("レース番号", list(range(1, 13)), default=st.session_state.radio_race_no, disabled=_ui_disabled, key="radio_race_no_widget", format_func=lambda x: f"{x}R")
+            with st.container(key="race_no_pills_wrap"):
+                race_no = st.pills("レース番号", list(range(1, 13)), default=st.session_state.radio_race_no, disabled=_ui_disabled, key="radio_race_no_widget", format_func=lambda x: f"{x}R")
             # 選択値を session_state と query_params に反映
             st.session_state.radio_race_no = race_no
             if str(race_no) != st.query_params.get("race"):
@@ -531,8 +538,9 @@ if app_mode == "予想":
                     st.session_state.pills_race_date = date.today()
                 if st.session_state.pills_race_date not in _date_options:
                     st.session_state.pills_race_date = date.today()
-            race_date = st.pills("開催日", _date_options, disabled=_ui_disabled, key="pills_race_date",
-                                 format_func=lambda d: _date_labels[d])
+            with st.container(key="date_pills_wrap"):
+                race_date = st.pills("開催日", _date_options, disabled=_ui_disabled, key="pills_race_date",
+                                     format_func=lambda d: _date_labels[d])
             if race_date:
                 _d_val = race_date.strftime("%Y%m%d")
                 if _d_val != st.query_params.get("d"):
