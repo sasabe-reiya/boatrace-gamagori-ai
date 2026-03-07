@@ -1,5 +1,5 @@
 """
-boatrace.jp から蒲郡の出走表・直前情報をスクレイピングするモジュール。
+boatrace.jp から出走表・直前情報をスクレイピングするモジュール（複数会場対応）。
 【v3 追加機能】
 - F/L回数・登録番号の取得
 - 体重・展示周回タイムの取得
@@ -17,11 +17,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 try:
-    from config import BASE_URL, JYCD, HEADERS
+    import config as _cfg
+    from config import BASE_URL, HEADERS
 except ImportError:
+    import types as _types
+    _cfg = _types.SimpleNamespace(JYCD="07", get_venue_config=lambda jycd=None: {"has_iot_weather": True, "has_original_exhibit": True, "has_taka_yoso": True})
     BASE_URL = "https://www.boatrace.jp"
-    JYCD = "07"
     HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+
+def _jycd():
+    """アクティブ会場コードを返す（config.set_venue() で動的に切り替わる）。"""
+    return _cfg.JYCD
 
 def _get_soup(url: str, params: dict, session: requests.Session | None = None) -> BeautifulSoup | None:
     try:
@@ -51,7 +58,7 @@ def _zenkaku_to_frame(s: str) -> str:
 def _fetch_racelist_soup(race_no: int, date_str: str, session: requests.Session | None = None) -> BeautifulSoup | None:
     """racelist ページの BeautifulSoup を返す（soup 共有用）。"""
     url = f"{BASE_URL}/owpc/pc/race/racelist"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     return _get_soup(url, params, session=session)
 
 
@@ -100,7 +107,7 @@ def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulS
         # is-lineH2 セルが5つある構造:
         #   [0] F回数|L回数|平均ST
         #   [1] 全国勝率|全国2連率|全国3連率
-        #   [2] 蒲郡勝率|蒲郡2連率|蒲郡3連率
+        #   [2] 当地勝率|当地2連率|蒲郡3連率
         #   [3] モーター番号|モーター2連率|モーター3連率
         #   [4] ボート番号|ボート2連率|ボート3連率
         line_tds = tbody.find_all("td", class_=re.compile("is-lineH2"))
@@ -128,8 +135,8 @@ def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulS
             if len(vals) >= 2: n2 = vals[1]  # 全国2連率
         if len(line_tds) > 2:
             vals = [_to_float(v) for v in line_tds[2].get_text(separator="|").split("|") if _to_float(v) is not None]
-            if len(vals) >= 1: lw = vals[0]  # 蒲郡勝率
-            if len(vals) >= 2: l2 = vals[1]  # 蒲郡2連率
+            if len(vals) >= 1: lw = vals[0]  # 当地勝率
+            if len(vals) >= 2: l2 = vals[1]  # 当地2連率
         if len(line_tds) > 3:
             vals = [_to_float(v) for v in line_tds[3].get_text(separator="|").split("|") if _to_float(v) is not None]
             if len(vals) >= 1 and vals[0] is not None:
@@ -182,7 +189,7 @@ def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulS
             "枠番": frame_no, "選手名": player_name, "級別": rank,
             "登録番号": reg_no,
             "F回数": f_count, "L回数": l_count,
-            "全国勝率": nw, "全国2連率": n2, "蒲郡勝率": lw, "蒲郡2連率": l2,
+            "全国勝率": nw, "全国2連率": n2, "当地勝率": lw, "当地2連率": l2,
             "スタートタイミング": st,
             "モーター番号": motor_no, "モーター2連率": motor2,
             "ボート番号": boat_no,  "ボート2連率":  boat2,
@@ -254,7 +261,7 @@ def fetch_gamagori_weather() -> dict | None:
 def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.DataFrame, dict]:
     if date_str is None: date_str = datetime.now().strftime("%Y%m%d")
     url = f"{BASE_URL}/owpc/pc/race/beforeinfo"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
 
     weather = {"天気": "-", "気温": "-", "水温": "-", "風速": "-", "風向": "-", "波高": "-", "湿度": "-", "気圧": "-", "安定板": False}
@@ -353,11 +360,12 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             _wave = _get_label_data(unit)
             weather["波高"] = _wave if _wave else "-"
 
-    # ── 蒲郡公式リアルタイム気象で上書き ──────────────
-    gw = fetch_gamagori_weather()
-    if gw:
-        for k in ("風速", "風向", "気温", "水温", "湿度", "気圧"):
-            weather[k] = gw[k]
+    # ── 蒲郡公式リアルタイム気象で上書き（蒲郡のみ）──────────────
+    if _cfg.get_venue_config().get("has_iot_weather"):
+        gw = fetch_gamagori_weather()
+        if gw:
+            for k in ("風速", "風向", "気温", "水温", "湿度", "気圧"):
+                weather[k] = gw[k]
 
     # ── 展示進入コース解析 ──────────────────────────
     # table1_boatImage1 セクションにスタート展示の進入コース順が表示される
@@ -420,18 +428,19 @@ def fetch_full_race_data(
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
-    # ── Phase 1: 独立した3つのHTTPリクエストを並列実行 ──────
+    # ── Phase 1: 独立した HTTPリクエストを並列実行 ──────
     # racelist soup → 出走表 + グレード（同一ページから2つ抽出）
     # beforeinfo   → 展示タイム + 気象
-    # gamagori_time → 蒲郡独自展示データ
+    # 会場独自展示データ（対応会場のみ）
+    _venue = _cfg.get_venue_config()
     with ThreadPoolExecutor(max_workers=3) as executor:
         f_soup  = executor.submit(_fetch_racelist_soup, race_no, date_str)
         f_before = executor.submit(fetch_before_info, race_no, date_str)
-        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str)
+        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str) if _venue.get("has_original_exhibit") else None
 
         racelist_soup = f_soup.result()
         ex_df, weather = f_before.result()
-        gama_time_df = f_gama.result()
+        gama_time_df = f_gama.result() if f_gama else pd.DataFrame()
 
     # ── 出走表をsoupからパース（HTTPリクエストなし） ──────
     card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
@@ -447,7 +456,7 @@ def fetch_full_race_data(
         final_df["体重"] = None
         final_df["周回タイム"] = None
 
-    # ── 蒲郡公式サイト：オリジナル展示タイム取得 ──────
+    # ── 会場独自展示タイム ──────
     if not gama_time_df.empty:
         final_df = pd.merge(final_df, gama_time_df, on="枠番", how="left")
     else:
@@ -508,14 +517,15 @@ def fetch_base_race_data(
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
+    _venue = _cfg.get_venue_config()
     with ThreadPoolExecutor(max_workers=3) as executor:
         f_soup   = executor.submit(_fetch_racelist_soup, race_no, date_str)
         f_before = executor.submit(fetch_before_info, race_no, date_str)
-        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str)
+        f_gama   = executor.submit(fetch_gamagori_time, race_no, date_str) if _venue.get("has_original_exhibit") else None
 
         racelist_soup = f_soup.result()
         ex_df, weather = f_before.result()
-        gama_time_df = f_gama.result()
+        gama_time_df = f_gama.result() if f_gama else pd.DataFrame()
 
     card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
     if card_df.empty:
@@ -604,7 +614,7 @@ def fetch_odds_3t(race_no: int, date_str: str | None = None) -> dict:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds3t"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return {}
@@ -712,7 +722,7 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds2tf"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return {"2連単": {}, "2連複": {}}
@@ -883,7 +893,7 @@ def fetch_deadline(race_no: int, date_str: str | None = None, _soup: BeautifulSo
     soup = _soup
     if not soup:
         url = f"{BASE_URL}/owpc/pc/race/racelist"
-        params = {"jcd": JYCD, "hd": date_str, "rno": 1}
+        params = {"jcd": _jycd(), "hd": date_str, "rno": 1}
         soup = _get_soup(url, params)
     if not soup:
         return "-"
@@ -921,7 +931,7 @@ def fetch_lady_racers(date_str: str | None = None) -> set[str]:
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
     soup = _get_soup(f"{BASE_URL}/owpc/pc/race/raceindex",
-                     {"jcd": JYCD, "hd": date_str})
+                     {"jcd": _jycd(), "hd": date_str})
     if not soup:
         return set()
     lady_set: set[str] = set()
@@ -954,7 +964,7 @@ def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/raceresult"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return None
@@ -1300,7 +1310,7 @@ def fetch_gamagori_time(race_no: int, date_str: str | None = None) -> pd.DataFra
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
 
-    path = f"time/time{date_str}{JYCD}{race_no:02d}.htm"
+    path = f"time/time{date_str}{_jycd()}{race_no:02d}.htm"
     html = _fetch_gamagori_html(path)
     if not html:
         return pd.DataFrame()
@@ -1452,7 +1462,7 @@ def fetch_gamagori_taka(race_no: int, date_str: str | None = None) -> dict:
     }
 
     # ── 高橋アナ予想HTMLページを取得 ──────────────────────────────
-    path = f"takahashi/takahashi{date_str}07{race_no:02d}.htm"
+    path = f"takahashi/takahashi{date_str}{_jycd()}{race_no:02d}.htm"
     html = _fetch_gamagori_html(path)
     if not html:
         print(f"[gamagori] 高橋アナページ取得失敗: {path}")
@@ -1581,8 +1591,8 @@ def generate_sample_data(race_no: int = 1) -> tuple[pd.DataFrame, dict]:
             "L回数": 0,
             "全国勝率": 6.0 + random.uniform(-1, 1),
             "全国2連率": 38.0 + random.uniform(-5, 5),
-            "蒲郡勝率": 5.5 + random.uniform(-1, 1),
-            "蒲郡2連率": 35.0 + random.uniform(-5, 5),
+            "当地勝率": 5.5 + random.uniform(-1, 1),
+            "当地2連率": 35.0 + random.uniform(-5, 5),
             "スタートタイミング": sample_sts[i - 1],
             "展示タイム": 6.7 + random.uniform(-0.1, 0.1),
             "チルト": 0.0 if i <= 2 else (-0.5 if i <= 4 else 0.5),
@@ -1818,7 +1828,7 @@ def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/raceresult"
-    params = {"jcd": JYCD, "hd": date_str, "rno": race_no}
+    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return None

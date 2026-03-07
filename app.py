@@ -1,5 +1,5 @@
 """
-蒲郡ボートレース予想Webアプリ - UIメイン（v3）
+ボートレース予想Webアプリ - UIメイン（v3）複数会場対応
 【v3 追加機能】
 - 推奨買い目を5つ（本命・対抗・穴・注目・参考）まで表示
 - 「期待値スコア」→ 的中確率(%)・公正オッズ・実オッズ・期待値 に変更
@@ -24,7 +24,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 APP_VERSION = "v3.1-20260304"
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import JYNAME
+import config as _cfg
+from config import VENUE_CONFIGS, set_venue, get_venue_config
 from race_scraper import (
     fetch_full_race_data, fetch_race_card,
     fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
@@ -172,7 +173,7 @@ def check_password():
     st.markdown(
         '<div style="max-width:400px;margin:80px auto;text-align:center">'
         '<h2 style="color:#e8f4ff;white-space:nowrap;font-size:1.4rem">🔱 競艇予想AI レイヤドン</h2>'
-        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">― GAMAGORI BOATRACE ―</p>'
+        '<p style="color:#5a9fd4;font-size:0.6rem;letter-spacing:4px;margin-top:-8px">― BOATRACE AI ―</p>'
         '<p style="color:#7ab8e8">アクセスにはパスワードが必要です</p>'
         '</div>',
         unsafe_allow_html=True,
@@ -336,7 +337,7 @@ st.markdown('''<div class="main-header">
     </div>
     <div>
       <h1>競艇予想AI レイヤドン</h1>
-      <div class="logo-sub">― GAMAGORI BOATRACE ―</div>
+      <div class="logo-sub">― BOATRACE AI ―</div>
     </div>
   </div>
   <svg class="logo-wave" viewBox="0 0 1200 30" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
@@ -359,6 +360,23 @@ st.markdown(
 if "running" not in st.session_state:
     st.session_state.running = False
 _ui_disabled = st.session_state.running
+
+# ── 会場選択 ──────────────────────────────────────────────────────
+_venue_options = {v["name"]: k for k, v in VENUE_CONFIGS.items()}
+_venue_cols = st.columns([1, 1])
+with _venue_cols[0]:
+    _selected_venue_name = st.selectbox(
+        "会場", list(_venue_options.keys()),
+        index=list(_venue_options.values()).index(st.query_params.get("venue", "07")),
+        disabled=_ui_disabled,
+        key="venue_select",
+        label_visibility="collapsed",
+    )
+_selected_venue_code = _venue_options[_selected_venue_name]
+if _selected_venue_code != st.query_params.get("venue", "07"):
+    st.query_params["venue"] = _selected_venue_code
+set_venue(_selected_venue_code)
+_venue = get_venue_config()
 
 app_mode = st.radio(
     "モード", ["予想", "出走表一覧"], horizontal=True,
@@ -594,7 +612,7 @@ if app_mode == "予想":
             f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
             f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
             f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
-            f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str)
+            f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str) if _venue.get("has_taka_yoso") else None
             f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
             f_lady     = executor.submit(fetch_lady_racers, d_str)
 
@@ -602,12 +620,13 @@ if app_mode == "予想":
                 f_data:     "出走表・直前データ",
                 f_odds:     "3連単オッズ",
                 f_odds_2tf: "2連単オッズ",
-                f_taka:     "高橋アナ予想",
                 f_rresult:  "レース結果",
                 f_lady:     "女子選手情報",
             }
+            if f_taka is not None:
+                phase1_map[f_taka] = "高橋アナ予想"
             done_count = 0
-            total_tasks = 8  # Phase1: 6 + Phase2: 2
+            total_tasks = len(phase1_map) + 2  # Phase1 + Phase2: 2
             for future in as_completed(phase1_map):
                 done_count += 1
                 name = phase1_map[future]
@@ -618,7 +637,7 @@ if app_mode == "予想":
             df_raw, weather, racelist_soup = f_data.result()
             odds     = f_odds.result()
             odds_2tf = f_odds_2tf.result()
-            taka     = f_taka.result()
+            taka     = f_taka.result() if f_taka else {}
             race_result_data = f_rresult.result()
             lady_racers = f_lady.result()
 
@@ -1271,7 +1290,7 @@ if app_mode == "予想":
         for col in ["F回数", "体重"]:
             if col in scored.columns:
                 extra_cols.append(col)
-        base_cols += ["全国勝率", "蒲郡勝率"]
+        base_cols += ["全国勝率", "当地勝率"]
         if "モーター2連率" in scored.columns:
             extra_cols.append("モーター2連率")
         if "スタートタイミング" in scored.columns:
@@ -1314,7 +1333,7 @@ if app_mode == "予想":
             _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
             display_df.loc[_lady_mask, "選手名"] = '<span style="color:#ff0000;font-size:1.1em">♥</span> ' + display_df.loc[_lady_mask, "選手名"].astype(str)
 
-        fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "蒲郡勝率": "{:.2f}"}
+        fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "当地勝率": "{:.2f}"}
         if "M2連(%)" in display_df.columns:
             fmt["M2連(%)"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
         if "平均ST" in display_df.columns:
@@ -1603,12 +1622,13 @@ if app_mode == "予想":
         else:
             st.caption("展開予想を生成するのに十分なデータがありません")
 
-        # ── 高橋アナ予想パネル ────────────────────────────────────────
-        st.markdown("---")
+        # ── 高橋アナ予想パネル（蒲郡のみ）───────────────────────────────
         taka = st.session_state.taka or {}
-        st.markdown("### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
+        if _venue.get("has_taka_yoso"):
+            st.markdown("---")
+            st.markdown("### 🎤 高橋アナの予想（蒲郡競艇公式サイト）")
 
-        if taka.get("available"):
+        if _venue.get("has_taka_yoso") and taka.get("available"):
             tenkai = taka.get("tenkai", "")
             if tenkai and tenkai != "（入力中）":
                 _BOAT_BADGE = {
@@ -1758,7 +1778,7 @@ if app_mode == "予想":
             # スコア反映注記
             if taka.get("chart_scores"):
                 st.caption("※ 高橋アナ評価チャートはAIスコアに反映済みです")
-        else:
+        elif _venue.get("has_taka_yoso"):
             st.markdown(
                 '<div style="background:#151f35;border:1px solid #2a4a80;border-radius:8px;'
                 'padding:1rem;color:#666;text-align:center">'
@@ -2033,8 +2053,8 @@ if app_mode == "予想":
         def _make_radar_chart(df_scored: pd.DataFrame) -> go.Figure:
             """scored DataFrameから艇別レーダーチャートを生成する。"""
             dims = [
-                ("蒲郡勝率",   "蒲郡勝率",   False),
-                ("蒲郡2連率",  "蒲郡2連率",  False),
+                ("当地勝率",   "当地勝率",   False),
+                ("当地2連率",  "当地2連率",  False),
                 ("展示タイム", "展示タイム", True),
                 ("モーター2連率", "モーター",  False),
                 ("スタートタイミング", "ST速さ", True),
@@ -2134,15 +2154,16 @@ if app_mode == "予想":
         st.markdown("---")
         # ── 予想パラメータ一覧 ────────────────────────────────────────
         with st.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
-            from config import SCORE_WEIGHTS as _W, GAMAGORI_SETTINGS as _G
+            _W = _cfg.SCORE_WEIGHTS
+            _G = _cfg.GAMAGORI_SETTINGS
 
             param_groups = [
                 ("コース・勝率", [
                     ("コース基礎確率", f'{_W["course_base"]}'),
                     ("全国勝率の重み", f'{_W["win_rate"]}'),
-                    ("蒲郡勝率の重み", f'{_W["local_win_rate"]}'),
+                    ("当地勝率の重み", f'{_W["local_win_rate"]}'),
                     ("全国2連率の重み", f'{_W["nat2_rate"]}'),
-                    ("蒲郡2連率の重み", f'{_W["loc2_rate"]}'),
+                    ("当地2連率の重み", f'{_W["loc2_rate"]}'),
                     ("コース別1着率の重み", f'{_W["course_win_rate"]}'),
                 ]),
                 ("展示・機力", [
@@ -2367,7 +2388,7 @@ else:
         _sd_fmt = f"{_sd[:4]}/{_sd[4:6]}/{_sd[6:]}" if len(_sd) == 8 else _sd
         st.markdown(
             f'<div style="color:#7ab8e8;font-size:0.85rem;margin-bottom:0.5rem">'
-            f'📅 {_sd_fmt} 蒲郡ボートレース 全レース出走表</div>',
+            f'📅 {_sd_fmt} {_venue["short_name"]}ボートレース 全レース出走表</div>',
             unsafe_allow_html=True,
         )
 
@@ -2391,7 +2412,7 @@ else:
                 name = row.get("選手名", "")
                 rank = row.get("級別", "")
                 nw = row.get("全国勝率", "-")
-                lw = row.get("蒲郡勝率", "-")
+                lw = row.get("当地勝率", "-")
                 m2 = row.get("モーター2連率", "-")
                 b2 = row.get("ボート2連率", "-")
                 st_val = row.get("スタートタイミング", "-")

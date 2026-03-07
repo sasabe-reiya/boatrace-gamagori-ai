@@ -19,6 +19,7 @@ from itertools import permutations
 import numpy as np
 import pandas as pd
 
+import config as _cfg
 from config import GAMAGORI_SETTINGS as G, SCORE_WEIGHTS as W
 
 
@@ -87,9 +88,15 @@ def _safe_col(df, col):
 
 
 # ────────────────────────────────────────────────────────────────
-# 蒲郡コース特性定数
+# コース特性定数（会場設定から動的に取得）
 # ────────────────────────────────────────────────────────────────
 
+def _get_course_win_rate():
+    """アクティブ会場のコース別1着率を返す。"""
+    stats = _cfg.GAMAGORI_COURSE_STATS  # set_venue()で動的に切り替わる
+    return [stats[c]["1着"] / 100.0 for c in range(1, 7)]
+
+# 後方互換用（直接参照している箇所用のフォールバック）
 GAMAGORI_COURSE_WIN_RATE = [0.555, 0.095, 0.115, 0.095, 0.085, 0.055]
 
 # 蒲郡の地理: 南西の風=向かい風, 北東の風=追い風
@@ -203,20 +210,21 @@ def calculate_scores(
                 course_positions.append(len(course_positions))
     else:
         course_positions = list(range(n))
-    course_probs = np.array([GAMAGORI_COURSE_WIN_RATE[pos] for pos in course_positions])
+    _cwr = _get_course_win_rate()
+    course_probs = np.array([_cwr[pos] for pos in course_positions])
     scores = np.zeros(n, dtype=float)
 
     # ── Step 2: 勝率・2連率複合補正 ──────────────────────────────
     win_rates   = df["全国勝率"].apply(_to_float).values
-    local_rates = df["蒲郡勝率"].apply(_to_float).values
+    local_rates = df["当地勝率"].apply(_to_float).values
 
     if "全国2連率" in df.columns:
         nat2_rates = df["全国2連率"].apply(_to_float).values
     else:
         nat2_rates = win_rates * 2.5
 
-    if "蒲郡2連率" in df.columns:
-        loc2_rates = df["蒲郡2連率"].apply(_to_float).values
+    if "当地2連率" in df.columns:
+        loc2_rates = df["当地2連率"].apply(_to_float).values
     else:
         loc2_rates = local_rates * 2.5
 
@@ -683,11 +691,11 @@ def _build_reasons(
     n = len(df)
     tilts         = df["チルト"].apply(_to_float).values
     exhibit_times = df["展示タイム"].apply(_to_float).values
-    local_rates   = df["蒲郡勝率"].apply(_to_float).values
+    local_rates   = df["当地勝率"].apply(_to_float).values
     valid_et      = exhibit_times[exhibit_times > 0]
     best_et       = valid_et.min() if len(valid_et) > 0 else -1
 
-    loc2 = df["蒲郡2連率"].apply(_to_float).values if "蒲郡2連率" in df.columns else local_rates * 2.5
+    loc2 = df["当地2連率"].apply(_to_float).values if "当地2連率" in df.columns else local_rates * 2.5
 
     st_vals = np.full(n, np.nan)
     if "スタートタイミング" in df.columns:
@@ -758,9 +766,9 @@ def _build_reasons(
 
         # 勝率
         if local_rates[i] == local_rates.max() and local_rates[i] > 0:
-            r.append(f"蒲郡勝率1位({local_rates[i]:.2f})")
+            r.append(f"当地勝率1位({local_rates[i]:.2f})")
         if loc2[i] == loc2.max() and loc2[i] > 0:
-            r.append(f"蒲郡2連率1位({loc2[i]:.1f}%)")
+            r.append(f"当地2連率1位({loc2[i]:.1f}%)")
 
         # 荒れ条件
         if wave_height >= 10 and ci >= 3:
@@ -1213,7 +1221,7 @@ def generate_tenkai_prediction(
     if c1_idx is None:
         return []
 
-    nige_score = 0.555  # 蒲郡の基礎イン逃げ率
+    nige_score = _get_course_win_rate()[0]  # 当地の基礎イン逃げ率
 
     # ST優位性
     if mean_st is not None and not np.isnan(st_vals[c1_idx]):
@@ -1541,7 +1549,7 @@ def predict(
     weather_note = "" if weather_reliable else "⏰ 気象データ未反映（締切1時間以上前）"
     is_stabilizer = weather.get("安定板", False)
     summary_lines = [
-        f"📍 蒲郡 {race_no}R 予想サマリ",
+        f"📍 {_cfg.JYNAME} {race_no}R 予想サマリ",
         f"🏆 グレード: {grade}" + (" / 優勝戦" if weather.get("is_final") else ""),
         f"💨 風速: {weather.get('風速','?')} / 風向: {weather.get('風向','?')} / 天気: {weather.get('天気','?')}"
         + (f"  ({weather_note})" if weather_note else ""),
