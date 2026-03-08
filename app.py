@@ -1372,7 +1372,7 @@ if app_mode == "予想":
 
         _render_3t_section()
 
-        # ── FOCUS フォーメーション買い目 ──────────────────────────────
+        # ── FOCUS フォーメーション買い目（本命） ─────────────────────
         _focus = st.session_state.result.get("focus_formation", {})
         _focus_f = _focus.get("F", [])
         _focus_s = _focus.get("S", [])
@@ -1381,110 +1381,79 @@ if app_mode == "予想":
             _n_f = _focus.get("点数_F", 0)
             _n_s = _focus.get("点数_S", 0)
             st.markdown(
-                f'### FOCUS <span style="color:#888;font-size:0.8rem;margin-left:8px">'
-                f'2連単 {_n_f}点 / 3連単 {_n_s}点 = 計 {_n_f + _n_s}点</span>',
+                f'### FOCUS'
+                f'<span style="color:#888;font-size:0.8rem;margin-left:8px">'
+                f'計 {_n_f + _n_s}点</span>',
                 unsafe_allow_html=True,
             )
 
             _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
             _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
-            _GRP_COLOR = {"本命": "#e74c3c", "対抗": "#3498db", "穴": "#2ecc71"}
 
-            def _focus_badge(num: str, is_axis: bool = False) -> str:
+            def _focus_badge(num: str) -> str:
                 bg = _FBG.get(num, "#555")
                 fg = _FFG.get(num, "#fff")
-                border = "border:2px solid #ffe066;" if is_axis else ""
                 return (
                     f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-                    f'width:24px;height:24px;min-width:24px;border-radius:5px;'
-                    f'background:{bg};color:{fg};font-weight:bold;font-size:0.85rem;'
-                    f'{border}margin:0 1px">{num}</span>'
+                    f'width:26px;height:26px;min-width:26px;border-radius:5px;'
+                    f'background:{bg};color:{fg};font-weight:bold;font-size:0.9rem;'
+                    f'margin:0 1px">{num}</span>'
                 )
 
-            # ── F行（2連単） ──
-            _f_html_parts = []
+            _dash = (
+                '<span style="color:#fff;margin:0 5px;font-size:1.2rem;'
+                'font-weight:bold;line-height:1">&#8211;</span>'
+            )
+            _eq = (
+                '<span style="color:#ffe066;margin:0 5px;font-size:1.2rem;'
+                'font-weight:bold;line-height:1">=</span>'
+            )
+
+            # ── 各行を生成 ──
+            _rows_html = ""
+
+            # 2連単行
             for row in _focus_f:
                 parts = row["買い目"].split("-")
-                grp = row.get("グループ", "")
-                gc = _GRP_COLOR.get(grp, "#888")
-                badges = _focus_badge(parts[0], is_axis=True) + (
-                    f'<span style="color:#888;margin:0 1px;font-size:0.7rem">-</span>'
-                ) + _focus_badge(parts[1])
-                _f_html_parts.append(
-                    f'<div style="display:inline-flex;align-items:center;background:#0e1a2e;'
-                    f'border:1px solid {gc};border-radius:8px;padding:4px 8px;margin:3px 4px">'
+                badges = _focus_badge(parts[0]) + _dash + _focus_badge(parts[1])
+                _rows_html += (
+                    f'<div style="display:flex;align-items:center;padding:6px 0;'
+                    f'border-bottom:1px solid #1e3455">'
+                    f'<div style="background:#e74c3c;color:#fff;font-weight:bold;'
+                    f'padding:3px 8px;border-radius:5px;font-size:0.7rem;'
+                    f'min-width:44px;text-align:center;margin-right:10px">2連単</div>'
                     f'{badges}'
-                    f'<span style="color:{gc};font-size:0.6rem;margin-left:5px;white-space:nowrap">'
-                    f'{row["的中確率"]:.1f}%</span>'
                     f'</div>'
                 )
 
-            _f_html = (
-                f'<div style="display:flex;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
-                f'<div style="background:#e74c3c;color:#fff;font-weight:bold;font-size:0.9rem;'
-                f'padding:4px 10px;border-radius:6px;margin-right:8px;font-size:0.75rem">2連単</div>'
-                f'{"".join(_f_html_parts)}'
-                f'</div>'
-            )
-
-            # ── S行（3連単） ──
-            _s_html_parts = []
+            # 3連単行
             for row in _focus_s:
-                combo = row["買い目"]  # "1-3=2"
-                # parse: first-second=third
+                combo = row["買い目"]
+                _pts = row.get("点数", 1)
                 if "=" in combo:
+                    # 折り返し: 1-2=3 → 1着-（2着=3着）
                     axis_part, third = combo.split("=")
                     first, second = axis_part.split("-")
+                    badges = _focus_badge(first) + _dash + _focus_badge(second) + _eq + _focus_badge(third)
                 else:
+                    # 単独: 1-2-3
                     parts = combo.split("-")
                     first, second, third = parts[0], parts[1], parts[2] if len(parts) > 2 else "?"
-                grp = row.get("グループ", "")
-                gc = _GRP_COLOR.get(grp, "#888")
-                badges = (
-                    _focus_badge(first, is_axis=True)
-                    + f'<span style="color:#888;margin:0 1px;font-size:0.7rem">-</span>'
-                    + _focus_badge(second, is_axis=True)
-                    + f'<span style="color:#888;margin:0 1px;font-size:0.7rem">=</span>'
-                    + _focus_badge(third)
-                )
-                ev = row.get("期待値")
-                ev_badge = ""
-                if ev is not None and ev >= 1.0:
-                    ev_badge = (
-                        f'<span style="color:#2ecc71;font-size:0.55rem;margin-left:3px">EV{ev:.1f}</span>'
-                    )
-                _s_html_parts.append(
-                    f'<div style="display:inline-flex;align-items:center;background:#0e1a2e;'
-                    f'border:1px solid {gc};border-radius:8px;padding:4px 8px;margin:3px 4px">'
-                    f'{badges}'
-                    f'<span style="color:{gc};font-size:0.6rem;margin-left:5px;white-space:nowrap">'
-                    f'{row["的中確率"]:.2f}%</span>'
-                    f'{ev_badge}'
+                    badges = _focus_badge(first) + _dash + _focus_badge(second) + _dash + _focus_badge(third)
+                _pts_label = f'<span style="color:#888;font-size:0.65rem;margin-left:8px">{_pts}点</span>'
+                _rows_html += (
+                    f'<div style="display:flex;align-items:center;padding:6px 0;'
+                    f'border-bottom:1px solid #1e3455">'
+                    f'<div style="background:#3498db;color:#fff;font-weight:bold;'
+                    f'padding:3px 8px;border-radius:5px;font-size:0.7rem;'
+                    f'min-width:44px;text-align:center;margin-right:10px">3連単</div>'
+                    f'{badges}{_pts_label}'
                     f'</div>'
                 )
-
-            _s_html = (
-                f'<div style="display:flex;align-items:center;flex-wrap:wrap">'
-                f'<div style="background:#3498db;color:#fff;font-weight:bold;font-size:0.9rem;'
-                f'padding:4px 10px;border-radius:6px;margin-right:8px;font-size:0.75rem">3連単</div>'
-                f'{"".join(_s_html_parts)}'
-                f'</div>'
-            )
-
-            # 凡例
-            _legend = (
-                '<div style="font-size:0.7rem;color:#666;margin-top:8px">'
-                '<span style="color:#e74c3c">■</span> 本命　'
-                '<span style="color:#3498db">■</span> 対抗　'
-                '<span style="color:#2ecc71">■</span> 穴　|　'
-                '<span style="border:2px solid #ffe066;border-radius:4px;padding:0 3px;font-size:0.6rem">枠</span> = 軸'
-                '</div>'
-            )
 
             st.markdown(
                 f'<div style="background:#111a2e;border:1px solid #2a4a80;border-radius:10px;'
-                f'padding:12px 14px;margin:8px 0">'
-                f'{_f_html}{_s_html}{_legend}</div>',
+                f'padding:10px 14px;margin:8px 0">{_rows_html}</div>',
                 unsafe_allow_html=True,
             )
 
