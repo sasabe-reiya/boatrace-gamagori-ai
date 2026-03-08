@@ -132,7 +132,7 @@ def _load_result_cache(race_no, d_str, device_id=""):
     except Exception:
         return None
 
-st.set_page_config(page_title="競艇予想AI レイヤドン", page_icon="🔱", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="競艇予想AI マクリザサ", page_icon="🔱", layout="centered", initial_sidebar_state="collapsed")
 
 # ── デバイスID（localStorage で端末識別）────────────────────────────
 # query_params に did が無い場合、JSで localStorage から取得/生成して
@@ -167,7 +167,7 @@ if "venue" not in st.query_params:
 
     st.markdown('''<div style="background:linear-gradient(135deg,#060e1f 0%,#0d2855 40%,#1a3a6b 70%,#0d2855 100%);
         padding:1.5rem;border-radius:12px;border:1px solid #1e5fa8;margin-top:2.5rem;text-align:center">
-        <h1 style="color:#e8f4ff;font-size:1.3rem;letter-spacing:2px;margin:0">競艇予想AI レイヤドン</h1>
+        <h1 style="color:#e8f4ff;font-size:1.3rem;letter-spacing:2px;margin:0">競艇予想AI マクリザサ</h1>
         <div style="color:#5a9fd4;font-size:0.65rem;letter-spacing:4px;margin-top:4px">― BOATRACE AI ―</div>
     </div>''', unsafe_allow_html=True)
 
@@ -348,7 +348,7 @@ st.markdown('''<div class="main-header">
       </svg>
     </div>
     <div>
-      <h1>競艇予想AI レイヤドン</h1>
+      <h1>競艇予想AI マクリザサ</h1>
       <div class="logo-sub">― BOATRACE AI ―</div>
     </div>
   </div>
@@ -1392,8 +1392,6 @@ if app_mode == "予想":
             "展示タイム" in scored.columns
             and scored["展示タイム"].apply(lambda x: pd.notnull(x) and x > 0).any()
         )
-        base_cols += ["win_prob", "highlight_reason"]
-
         display_cols = base_cols[:3] + extra_cols + base_cols[3:]
         seen = set()
         display_cols_unique = [
@@ -1402,8 +1400,6 @@ if app_mode == "予想":
         ]
 
         col_rename = {
-            "win_prob":          "1着確率(%)",
-            "highlight_reason":  "ポイント",
             "進入コース":         "展示進入",
             "モーター2連率":      "M2連(%)",
             "スタートタイミング": "平均ST",
@@ -1422,7 +1418,7 @@ if app_mode == "予想":
             _lady_mask = scored["登録番号"].astype(str).isin(_lady_set)
             display_df.loc[_lady_mask, "選手名"] = '<span style="color:#ff0000;font-size:1.1em">♥</span> ' + display_df.loc[_lady_mask, "選手名"].astype(str)
 
-        fmt = {"1着確率(%)": "{:.1f}%", "全国勝率": "{:.2f}", "当地勝率": "{:.2f}"}
+        fmt = {"全国勝率": "{:.2f}", "当地勝率": "{:.2f}"}
         if "M2連(%)" in display_df.columns:
             fmt["M2連(%)"] = lambda x: f"{x:.1f}" if pd.notnull(x) and x > 0 else "-"
         if "平均ST" in display_df.columns:
@@ -1480,23 +1476,66 @@ if app_mode == "予想":
         styled = styler.format(fmt).hide(axis="index")
         tbl_html = styled.to_html()
 
+        st.markdown(
+            f'<div style="overflow-x:auto;">{tbl_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 予測・ポイントテーブル ────────────────────────────────────
+        st.markdown("---")
+        st.markdown(f"### 🎯 {rno}R 予測・ポイント")
+
+        prob_cols = ["枠番", "選手名"]
+        if "win_prob" in scored.columns:
+            prob_cols.append("win_prob")
+        if "highlight_reason" in scored.columns:
+            prob_cols.append("highlight_reason")
+
+        prob_display_cols = [c for c in prob_cols if c in scored.columns]
+        prob_df = scored[prob_display_cols].rename(columns={
+            "win_prob": "1着確率(%)",
+            "highlight_reason": "ポイント",
+        }).copy()
+
+        # 女子選手にハートマーク
+        if _lady_set and "登録番号" in scored.columns:
+            _lady_mask_p = scored["登録番号"].astype(str).isin(_lady_set)
+            prob_df.loc[_lady_mask_p, "選手名"] = '<span style="color:#ff0000;font-size:1.1em">♥</span> ' + prob_df.loc[_lady_mask_p, "選手名"].astype(str)
+
+        prob_fmt = {}
+        if "1着確率(%)" in prob_df.columns:
+            prob_fmt["1着確率(%)"] = "{:.1f}%"
+
+        prob_styler = prob_df.style
+
+        # 女子選手の選手名セルをピンク色に
+        if _lady_set and "登録番号" in scored.columns:
+            _lady_mask_p_list = scored["登録番号"].astype(str).isin(_lady_set).tolist()
+            def _style_lady_name_p(col):
+                return ["color: #ff69b4" if _lady_mask_p_list[i] else "" for i in range(len(col))]
+            prob_styler = prob_styler.apply(_style_lady_name_p, subset=["選手名"])
+
+        prob_styler = prob_styler.set_table_styles(tbl_css)
+        prob_styled = prob_styler.format(prob_fmt).hide(axis="index")
+        prob_tbl_html = prob_styled.to_html()
+
         # ポイント列を左寄せにする
-        if "ポイント" in display_df.columns:
-            _point_idx = display_df.columns.get_loc("ポイント")
-            _uuid_m2 = re.search(r'id="(T_[a-zA-Z0-9_]+)"', tbl_html)
-            if _uuid_m2:
-                _tid2 = _uuid_m2.group(1)
+        if "ポイント" in prob_df.columns:
+            _point_idx = prob_df.columns.get_loc("ポイント")
+            _uuid_prob = re.search(r'id="(T_[a-zA-Z0-9_]+)"', prob_tbl_html)
+            if _uuid_prob:
+                _tid_prob = _uuid_prob.group(1)
                 _pcss = (
                     f"<style>"
-                    f"#{_tid2} th.col_heading.level0.col{_point_idx},"
-                    f"#{_tid2} td.col{_point_idx} {{"
+                    f"#{_tid_prob} th.col_heading.level0.col{_point_idx},"
+                    f"#{_tid_prob} td.col{_point_idx} {{"
                     f" text-align:left !important;"
                     f"}}</style>"
                 )
-                tbl_html = _pcss + tbl_html
+                prob_tbl_html = _pcss + prob_tbl_html
 
         st.markdown(
-            f'<div style="overflow-x:auto;">{tbl_html}</div>',
+            f'<div style="overflow-x:auto;">{prob_tbl_html}</div>',
             unsafe_allow_html=True,
         )
 
