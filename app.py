@@ -797,6 +797,17 @@ if app_mode == "予想":
     st.session_state.pop("_ui_flushed", None)
 
     # ── 結果表示 ─────────────────────────────────────────────────────
+    # 結果がない場合は固定バーを除去
+    if st.session_state.result is None:
+        _st_html("""<script>
+        (function(){
+          var bar = window.parent.document.getElementById('fixed-deadline-bar');
+          if(bar) bar.remove();
+          var mainEl = window.parent.document.querySelector('section.main');
+          if(mainEl) mainEl.style.paddingTop = '';
+        })();
+        </script>""", height=0)
+
     if st.session_state.result is not None:
         res    = st.session_state.result
         scored = res["scored_df"]
@@ -832,16 +843,75 @@ if app_mode == "予想":
             except Exception:
                 pass
 
+        # ── 締め切り固定バー（常に画面上部に表示） ──────────────────
+        _dl_iso = _dl_dt.isoformat() if _dl_dt else ""
         if _is_past_deadline:
-            _deadline_html = (
-                f'<div style="color:#e05c5c;font-size:0.85rem;margin-top:4px;font-weight:bold">'
-                f'締め切り済み</div>'
-            )
+            _fixed_deadline_status = '締め切り済み'
+            _fixed_deadline_color = '#e05c5c'
         else:
-            _deadline_html = (
-                f'<div style="color:#ff9800;font-size:0.85rem;margin-top:4px">'
-                f'⏰ 締切 {_dl_time}</div>'
-            )
+            _fixed_deadline_status = ''
+            _fixed_deadline_color = '#7ab8e8'
+
+        _st_html(f"""
+        <script>
+        (function(){{
+          var barId = 'fixed-deadline-bar';
+          var existing = window.parent.document.getElementById(barId);
+          if(existing) existing.remove();
+
+          var bar = window.parent.document.createElement('div');
+          bar.id = barId;
+          bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;' +
+            'background:linear-gradient(135deg,#0a1628 0%,#0d2855 100%);' +
+            'border-bottom:2px solid #f0a500;padding:6px 16px;' +
+            'display:flex;align-items:center;justify-content:center;gap:16px;' +
+            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+
+          var raceInfo = '<span style="color:#f0a500;font-size:1.2rem;font-weight:900;letter-spacing:1px">{_rno_disp}R</span>' +
+            '<span style="color:#aac8e8;font-size:0.8rem;margin-left:6px">{_date_fmt}</span>';
+
+          var deadlineInfo = '<span style="color:#ff9800;font-size:0.9rem">⏰ 締切 {_dl_time}</span>' +
+            '<span id="fixed-countdown" style="color:{_fixed_deadline_color};font-weight:bold;font-size:0.9rem;margin-left:8px">{_fixed_deadline_status}</span>';
+
+          bar.innerHTML = raceInfo + '<span style="color:#2a4a80;font-size:1.2rem">|</span>' + deadlineInfo;
+
+          var mainEl = window.parent.document.querySelector('section.main');
+          if(mainEl) {{
+            mainEl.style.paddingTop = '44px';
+          }}
+          window.parent.document.body.appendChild(bar);
+
+          var deadlineStr = "{_dl_iso}";
+          var isPast = {'true' if _is_past_deadline else 'false'};
+          if(deadlineStr && !isPast) {{
+            var deadline = new Date(deadlineStr);
+            var el = window.parent.document.getElementById('fixed-countdown');
+            function update(){{
+              var now = new Date();
+              var diff = Math.floor((deadline - now) / 1000);
+              if(diff <= 0){{
+                el.textContent = '締め切り済み';
+                el.style.color = '#e05c5c';
+                bar.style.borderBottomColor = '#e05c5c';
+                return;
+              }}
+              var m = Math.floor(diff / 60);
+              var s = diff % 60;
+              el.textContent = 'あと ' + m + '分' + String(s).padStart(2,'0') + '秒';
+              if(m < 5){{
+                el.style.color = '#e05c5c';
+                bar.style.borderBottomColor = '#e05c5c';
+              }} else {{
+                el.style.color = '#7ab8e8';
+                bar.style.borderBottomColor = '#f0a500';
+              }}
+            }}
+            update();
+            setInterval(update, 1000);
+          }}
+        }})();
+        </script>
+        """, height=0)
 
         st.markdown(
             f'<div style="background:linear-gradient(135deg,#0d2855,#1a3a6b);'
@@ -852,7 +922,6 @@ if app_mode == "予想":
             f'<span style="color:#f0a500;font-size:2rem;font-weight:900;letter-spacing:2px">{_rno_disp}R</span>'
             f'<span style="color:#fff;font-size:1rem">{_date_fmt}</span>'
             f'</div>'
-            f'{_deadline_html}'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -879,39 +948,15 @@ if app_mode == "予想":
                 disabled=(_rno_disp >= 12),
                 on_click=_go_next_race,
             )
-        # カウントダウン（JS自動更新）
-        if _dl_dt and not _is_past_deadline:
-            try:
-                _dl_iso = _dl_dt.isoformat()
-                _st_html(f"""
-                <div id="countdown-box" style="text-align:center;margin-top:-6px;margin-bottom:4px">
-                  <span id="countdown-text" style="font-weight:bold;font-size:0.85rem;color:#7ab8e8"></span>
-                </div>
-                <script>
-                (function(){{
-                  var deadline = new Date("{_dl_iso}");
-                  var el = document.getElementById("countdown-text");
-                  var box = document.getElementById("countdown-box");
-                  function update(){{
-                    var now = new Date();
-                    var diff = Math.floor((deadline - now) / 1000);
-                    if(diff <= 0){{
-                      el.textContent = "締め切り済み";
-                      el.style.color = "#e05c5c";
-                      return;
-                    }}
-                    var m = Math.floor(diff / 60);
-                    var s = diff % 60;
-                    el.textContent = "あと " + m + "分" + String(s).padStart(2,"0") + "秒";
-                    el.style.color = m < 5 ? "#e05c5c" : "#7ab8e8";
-                  }}
-                  update();
-                  setInterval(update, 1000);
-                }})();
-                </script>
-                """, height=30)
-            except Exception:
-                pass
+        # ── 予想再実行ボタン ──────────────────────────────────────
+        def _on_rerun_click():
+            st.session_state.running = True
+            st.session_state.show_settings = False
+            st.session_state._exec_race_no = _rno_disp
+            st.session_state._exec_race_date = st.session_state.get("_exec_race_date") or date.today()
+            st.session_state.result = None
+        st.button("🔄 予想を再実行", type="secondary", use_container_width=True,
+                  on_click=_on_rerun_click)
 
         # グレードバッジ + 気象メトリクス
         if st.session_state.weather:
