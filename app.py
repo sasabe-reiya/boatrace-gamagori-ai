@@ -1402,31 +1402,33 @@ if app_mode == "予想":
                 'font-weight:bold;line-height:1">=</span>'
             )
 
-            # ── 各行を生成 ──
-            _rows_html = ""
+            def _count_pts(combo: str) -> int:
+                return 2 if "=" in combo else 1
 
-            # 2連単行
+            # ── 2連単セクション ──
+            _f_rows = ""
             for row in _focus_f:
                 combo = row["買い目"]
+                pts = _count_pts(combo)
                 if "=" in combo:
                     a, b = combo.split("=")
                     badges = _focus_badge(a) + _eq + _focus_badge(b)
                 else:
                     a, b = combo.split("-")
                     badges = _focus_badge(a) + _dash + _focus_badge(b)
-                _rows_html += (
-                    f'<div style="display:flex;align-items:center;padding:6px 0;'
-                    f'border-bottom:1px solid #1e3455">'
-                    f'<div style="background:#e74c3c;color:#fff;font-weight:bold;'
-                    f'padding:3px 8px;border-radius:5px;font-size:0.7rem;'
-                    f'min-width:44px;text-align:center;margin-right:10px">2連単</div>'
-                    f'{badges}'
+                _f_rows += (
+                    f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                    f'padding:6px 0;border-bottom:1px solid #1e3455">'
+                    f'<div style="display:flex;align-items:center">{badges}</div>'
+                    f'<span style="color:#888;font-size:0.7rem">{pts}点</span>'
                     f'</div>'
                 )
 
-            # 3連単行
+            # ── 3連単セクション ──
+            _s_rows = ""
             for row in _focus_s:
                 combo = row["買い目"]
+                pts = _count_pts(combo)
                 if "=" in combo:
                     axis_part, third = combo.split("=")
                     first, second = axis_part.split("-")
@@ -1435,19 +1437,25 @@ if app_mode == "予想":
                     parts = combo.split("-")
                     first, second, third = parts[0], parts[1], parts[2] if len(parts) > 2 else "?"
                     badges = _focus_badge(first) + _dash + _focus_badge(second) + _dash + _focus_badge(third)
-                _rows_html += (
-                    f'<div style="display:flex;align-items:center;padding:6px 0;'
-                    f'border-bottom:1px solid #1e3455">'
-                    f'<div style="background:#3498db;color:#fff;font-weight:bold;'
-                    f'padding:3px 8px;border-radius:5px;font-size:0.7rem;'
-                    f'min-width:44px;text-align:center;margin-right:10px">3連単</div>'
-                    f'{badges}'
+                _s_rows += (
+                    f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                    f'padding:6px 0;border-bottom:1px solid #1e3455">'
+                    f'<div style="display:flex;align-items:center">{badges}</div>'
+                    f'<span style="color:#888;font-size:0.7rem">{pts}点</span>'
                     f'</div>'
                 )
 
+            _section_label = (
+                'style="color:#7ab8e8;font-size:0.75rem;font-weight:bold;'
+                'padding:4px 0;margin-top:6px;border-bottom:1px solid #2a4a80"'
+            )
+
             st.markdown(
                 f'<div style="background:#111a2e;border:1px solid #2a4a80;border-radius:10px;'
-                f'padding:10px 14px;margin:8px 0">{_rows_html}</div>',
+                f'padding:10px 14px;margin:8px 0">'
+                f'<div {_section_label}>2連単</div>{_f_rows}'
+                f'<div {_section_label}>3連単</div>{_s_rows}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
