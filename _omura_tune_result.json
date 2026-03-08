@@ -1,0 +1,139 @@
+{
+  "venue": "24",
+  "venue_name": "大村",
+  "optimized_weights": {
+    "individual_temp": 6.073,
+    "win_rate": 1.597,
+    "local_win_rate": 0.768,
+    "nat2_rate": 3.93,
+    "loc2_rate": 0.451,
+    "exhibit_time": 0.86,
+    "exhibit_top_bonus": 3.185,
+    "night_boost": -0.001,
+    "calm_in_boost": -0.0,
+    "st_weight": 31.074,
+    "motor2_rate": 3.289,
+    "boat2_rate": 0.871,
+    "course_win_rate": 1.914,
+    "momentum": 2.047,
+    "mawari_time": 1.147,
+    "chokusen_time": 1.43,
+    "turn_master_bonus": 1.925,
+    "fl_f_penalty": 2.577,
+    "kado_boost": 0.715,
+    "makuri_sashi": 2.353,
+    "rank_a1": 1.788,
+    "rank_a2": 1.425,
+    "stabilizer_in_boost": 3.421,
+    "stabilizer_equalize": 0.139,
+    "prob_cap": 103.223
+  },
+  "before": {
+    "total": 155,
+    "avg_ll": -1.0796,
+    "top1_rate": 64.52,
+    "tri_rate": 56.77,
+    "b1_pred": 55.65,
+    "b1_actual": 65.81,
+    "b1_gap": -10.16,
+    "calibration": [
+      {
+        "range": "0-30%",
+        "count": 17,
+        "predicted": 21.3,
+        "actual": 35.3,
+        "gap": 14.0
+      },
+      {
+        "range": "30-40%",
+        "count": 19,
+        "predicted": 35.4,
+        "actual": 42.1,
+        "gap": 6.7
+      },
+      {
+        "range": "40-50%",
+        "count": 14,
+        "predicted": 45.4,
+        "actual": 64.3,
+        "gap": 18.9
+      },
+      {
+        "range": "50-60%",
+        "count": 19,
+        "predicted": 55.3,
+        "actual": 63.2,
+        "gap": 7.8
+      },
+      {
+        "range": "60-70%",
+        "count": 21,
+        "predicted": 64.5,
+        "actual": 71.4,
+        "gap": 6.9
+      },
+      {
+        "range": "70-100%",
+        "count": 65,
+        "predicted": 70.0,
+        "actual": 80.0,
+        "gap": 10.0
+      }
+    ]
+  },
+  "after": {
+    "total": 155,
+    "avg_ll": -1.0383,
+    "top1_rate": 67.1,
+    "tri_rate": 58.71,
+    "b1_pred": 62.45,
+    "b1_actual": 65.81,
+    "b1_gap": -3.36,
+    "calibration": [
+      {
+        "range": "0-30%",
+        "count": 9,
+        "predicted": 20.5,
+        "actual": 33.3,
+        "gap": 12.8
+      },
+      {
+        "range": "30-40%",
+        "count": 15,
+        "predicted": 36.4,
+        "actual": 26.7,
+        "gap": -9.8
+      },
+      {
+        "range": "40-50%",
+        "count": 17,
+        "predicted": 45.0,
+        "actual": 64.7,
+        "gap": 19.7
+      },
+      {
+        "range": "50-60%",
+        "count": 21,
+        "predicted": 55.3,
+        "actual": 52.4,
+        "gap": -2.9
+      },
+      {
+        "range": "60-70%",
+        "count": 29,
+        "predicted": 65.2,
+        "actual": 75.9,
+        "gap": 10.7
+      },
+      {
+        "range": "70-100%",
+        "count": 64,
+        "predicted": 80.2,
+        "actual": 79.7,
+        "gap": -0.5
+      }
+    ]
+  },
+  "n_races": 155,
+  "timestamp": "2026-03-09T00:04:11.562670"
+}
