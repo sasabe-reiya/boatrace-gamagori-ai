@@ -553,15 +553,26 @@ def calculate_scores(
             bonus += 0.5  # v11: 1.0→0.5 外枠A1追加ボーナス縮小
         scores[i] += bonus
 
-    # ── Step 8b: コース別1着率 【v3新規】 ─────────────────────────
+    # ── Step 8b: コース別1着率 【v3新規 → コース基準正規化 + log圧縮】
+    # インコースの1着率が高いのは当然なので、各コースの全体平均1着率を
+    # 基準にして「そのコースの平均と比べてどれだけ優秀か」で評価する。
+    # 外コースは基準値が極端に低いため、比率が爆発しないようlog圧縮する。
     course_wr = _safe_col(df, "コース別1着率")
     if course_wr is not None:
-        valid_cwr = course_wr[course_wr > 0]
-        if len(valid_cwr) >= 2:
-            mean_cwr = valid_cwr.mean() + 1e-9
+        _cwr_base = _get_course_win_rate()  # コース別の全体平均1着率 (0-1)
+        valid_count = 0
+        normalized = np.zeros(n)
+        for i in range(n):
+            if course_wr[i] > 0:
+                base = _cwr_base[course_positions[i]] * 100.0  # %換算
+                ratio = course_wr[i] / (base + 1e-9)
+                # log圧縮: ratio=2.0 → +0.69, ratio=5.0 → +1.61, ratio=0.5 → -0.69
+                normalized[i] = np.log(max(ratio, 0.01))
+                valid_count += 1
+        if valid_count >= 2:
             for i in range(n):
                 if course_wr[i] > 0:
-                    scores[i] += (course_wr[i] / mean_cwr - 1.0) * W.get("course_win_rate", 3.5)
+                    scores[i] += normalized[i] * W.get("course_win_rate", 3.5)
 
     # ── Step 8c: 直近成績モメンタム 【v3新規】 ───────────────────
     recent_avg = _safe_col(df, "直近平均着順")
@@ -920,13 +931,15 @@ def _build_reasons(
         if l_counts is not None and l_counts[i] >= 1:
             r.append(f"L{int(l_counts[i])}持ち")
 
-        # 【v3追加】コース別1着率
+        # 【v3追加】コース別1着率（コース平均比で評価）
         if course_wr is not None and course_wr[i] > 0:
-            valid_cwr = course_wr[course_wr > 0]
-            if len(valid_cwr) >= 2 and course_wr[i] == valid_cwr.max():
-                r.append(f"コース別1着率トップ({course_wr[i]:.1f}%)")
-            elif len(valid_cwr) >= 2 and course_wr[i] >= 40:
-                r.append(f"コース別1着率高({course_wr[i]:.1f}%)")
+            _cwr_base_r = _get_course_win_rate()
+            base_pct = _cwr_base_r[course_positions[i]] * 100.0
+            ratio = course_wr[i] / (base_pct + 1e-9)
+            if ratio >= 1.3:
+                r.append(f"コース別1着率◎(平均比{ratio:.0%})")
+            elif ratio >= 1.15:
+                r.append(f"コース別1着率○(平均比{ratio:.0%})")
 
         # 【v3追加】直近成績モメンタム
         if recent_avg is not None and recent_avg[i] > 0:

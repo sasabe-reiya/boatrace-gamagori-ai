@@ -39,7 +39,7 @@ _SCORE_WEIGHTS_BASE = {
     "fl_l_penalty":      3.0,
     "weight_calm":      0.607,
     "weight_rough":      1.5,
-    "course_win_rate":  2.915,
+    "course_win_rate":  2.0,
     "momentum":         2.136,
     "lap_time":         0.0,
     "mawari_time":      1.2,
