@@ -20,8 +20,7 @@ from itertools import permutations
 import numpy as np
 import pandas as pd
 
-import config as _cfg
-from config import GAMAGORI_SETTINGS as G, SCORE_WEIGHTS as W
+from config import VENUE_CONFIGS, get_venue_params, DEFAULT_VENUE
 
 
 def _is_weather_reliable(deadline: str | None) -> bool:
@@ -92,9 +91,9 @@ def _safe_col(df, col):
 # コース特性定数（会場設定から動的に取得）
 # ────────────────────────────────────────────────────────────────
 
-def _get_course_win_rate():
-    """アクティブ会場のコース別1着率を返す。"""
-    stats = _cfg.GAMAGORI_COURSE_STATS  # set_venue()で動的に切り替わる
+def _get_course_win_rate(venue_code: str = DEFAULT_VENUE):
+    """指定会場のコース別1着率を返す。"""
+    stats = VENUE_CONFIGS[venue_code]["course_stats"]
     return [stats[c]["1着"] / 100.0 for c in range(1, 7)]
 
 # 後方互換用（直接参照している箇所用のフォールバック）
@@ -166,11 +165,11 @@ _WIND_EFFECT_OMURA = {
     "-":      {0:  0.0, 1:  0.0, 2:  0.0, 3:  0.0, 4:  0.0, 5:  0.0},
 }
 
-def _get_wind_effect() -> dict:
-    """現在の会場に応じた風向×コース効果テーブルを返す。"""
-    if _cfg.JYCD == "12":
+def _get_wind_effect(venue_code: str = DEFAULT_VENUE) -> dict:
+    """指定会場の風向×コース効果テーブルを返す。"""
+    if venue_code == "12":
         return _WIND_EFFECT_SUMINOE
-    if _cfg.JYCD == "24":
+    if venue_code == "24":
         return _WIND_EFFECT_OMURA
     return _WIND_EFFECT_GAMAGORI
 
@@ -201,12 +200,12 @@ _WIND_TYPE_OMURA = {
     "南東": "右横風", "東南東": "右横風", "東": "右横風", "南南東": "右横風",
 }
 
-def get_wind_type(wind_dir: str) -> str:
-    """現在の会場に応じて風向から風種別（追い風/向かい風/右横風/左横風）を返す。"""
+def get_wind_type(wind_dir: str, venue_code: str = DEFAULT_VENUE) -> str:
+    """指定会場に応じて風向から風種別（追い風/向かい風/右横風/左横風）を返す。"""
     if wind_dir == "-":
         return "-"
     _tables = {"12": _WIND_TYPE_SUMINOE, "24": _WIND_TYPE_OMURA}
-    table = _tables.get(_cfg.JYCD, _WIND_TYPE_GAMAGORI)
+    table = _tables.get(venue_code, _WIND_TYPE_GAMAGORI)
     return table.get(wind_dir, "-")
 
 
@@ -278,11 +277,15 @@ def calculate_scores(
     race_no: int,
     taka_data: dict | None = None,
     racer_kimarite: dict | None = None,
+    venue_code: str = DEFAULT_VENUE,
 ) -> pd.DataFrame:
     df = df.copy()
     n = len(df)
     if n == 0:
         return df
+
+    # 会場固有パラメータをローカルに取得（グローバル状態に依存しない）
+    G, _course_stats, W, _jycd, _jyname = get_venue_params(venue_code)
 
     # ── Step 1: コース位置の決定（ベイズモデル） ────────────────────
     # コース有利度は事前確率(prior)として分離し、個人スコアとベイズ結合する。
@@ -297,7 +300,7 @@ def calculate_scores(
                 course_positions.append(len(course_positions))
     else:
         course_positions = list(range(n))
-    _cwr = _get_course_win_rate()
+    _cwr = _get_course_win_rate(venue_code)
     course_probs = np.array([_cwr[pos] for pos in course_positions])
     scores = np.zeros(n, dtype=float)
 
@@ -505,7 +508,7 @@ def calculate_scores(
     wind_dir = weather.get("風向", "-")
     is_calm  = wind_speed <= G["calm_wind_threshold"]
 
-    wind_effect_table = _get_wind_effect()
+    wind_effect_table = _get_wind_effect(venue_code)
     if not is_calm and wind_dir in wind_effect_table:
         effect = wind_effect_table[wind_dir]
         wind_multiplier = min(wind_speed / 3.0, 3.0)
@@ -560,7 +563,7 @@ def calculate_scores(
     # 外コースは基準値が極端に低いため、比率が爆発しないようlog圧縮する。
     course_wr = _safe_col(df, "コース別1着率")
     if course_wr is not None:
-        _cwr_base = _get_course_win_rate()  # コース別の全体平均1着率 (0-1)
+        _cwr_base = _get_course_win_rate(venue_code)  # コース別の全体平均1着率 (0-1)
         valid_count = 0
         normalized = np.zeros(n)
         for i in range(n):
@@ -719,6 +722,7 @@ def calculate_scores(
         is_calm, is_night, wind_dir, wind_speed,
         wave_height, water_temp, course_positions,
         racer_kimarite=racer_kimarite,
+        venue_code=venue_code,
     )
 
     df["score"]            = scores.round(2)
@@ -785,6 +789,7 @@ def _build_reasons(
     is_calm, is_night, wind_dir, wind_speed,
     wave_height, water_temp, course_positions,
     racer_kimarite=None,
+    venue_code: str = DEFAULT_VENUE,
 ):
     reasons = []
     n = len(df)
@@ -833,7 +838,7 @@ def _build_reasons(
                 r.append("安定板→外枠不利")
 
         # コース特性（風向効果テーブルから追い風/向かい風を自動判定）
-        _wt = _get_wind_effect()
+        _wt = _get_wind_effect(venue_code)
         _wind_in_eff = _wt.get(wind_dir, {}).get(0, 0.0)
         if ci == 0:
             if is_calm:
@@ -934,7 +939,7 @@ def _build_reasons(
 
         # 【v3追加】コース別1着率（コース平均比で評価）
         if course_wr is not None and course_wr[i] > 0:
-            _cwr_base_r = _get_course_win_rate()
+            _cwr_base_r = _get_course_win_rate(venue_code)
             base_pct = _cwr_base_r[course_positions[i]] * 100.0
             ratio = course_wr[i] / (base_pct + 1e-9)
             if ratio >= 1.3:
@@ -1013,6 +1018,7 @@ def _adjusted_ability_for_winner(
     course_positions: list[int],
     racer_kimarite: dict | None,
     frames: np.ndarray,
+    venue_code: str = DEFAULT_VENUE,
 ) -> np.ndarray:
     """
     決まり手連動着順補正 【v6】
@@ -1022,6 +1028,7 @@ def _adjusted_ability_for_winner(
 
     Returns: 調整済み ability^γ 配列（shape: (n,)）
     """
+    W = VENUE_CONFIGS[venue_code]["score_weights"]
     a_gamma = ability ** gamma
 
     if not racer_kimarite:
@@ -1078,12 +1085,14 @@ def generate_recommendations(
     odds_dict: dict | None = None,
     course_positions: list[int] | None = None,
     racer_kimarite: dict | None = None,
+    venue_code: str = DEFAULT_VENUE,
 ) -> list[dict]:
     """
     Henery結合確率で3連単スコアを計算。
     本命3点・対抗3点は確率順、穴3点は期待値ベースで選定。
     【v6】決まり手連動着順補正を適用。
     """
+    W = VENUE_CONFIGS[venue_code]["score_weights"]
     if df_scored.empty or "win_prob" not in df_scored.columns:
         return [], []
 
@@ -1101,6 +1110,7 @@ def generate_recommendations(
     for i in range(n):
         adj_cache[i] = _adjusted_ability_for_winner(
             ability, i, gamma, cp, racer_kimarite, frames,
+            venue_code=venue_code,
         )
 
     candidates = []
@@ -1196,6 +1206,7 @@ def generate_2ren_recommendations(
     odds_2t: dict | None = None,
     course_positions: list[int] | None = None,
     racer_kimarite: dict | None = None,
+    venue_code: str = DEFAULT_VENUE,
 ) -> dict:
     """
     2連単の推奨買い目を生成する。
@@ -1205,6 +1216,7 @@ def generate_2ren_recommendations(
     ----------
     odds_2t : 2連単実オッズ {"1-2": 10.6, ...} or None
     """
+    W = VENUE_CONFIGS[venue_code]["score_weights"]
     if df_scored.empty or "win_prob" not in df_scored.columns:
         return {"2連単": []}
 
@@ -1223,6 +1235,7 @@ def generate_2ren_recommendations(
     for i in range(n):
         adj_cache[i] = _adjusted_ability_for_winner(
             ability, i, gamma, cp, racer_kimarite, frames,
+            venue_code=venue_code,
         )
 
     # 2連単: Heneryモデルで P(i=1着, j=2着)
@@ -1266,8 +1279,10 @@ def generate_tenkai_prediction(
     weather: dict,
     racer_kimarite: dict | None = None,
     race_no: int = 1,
+    venue_code: str = DEFAULT_VENUE,
 ) -> list[dict]:
     """1マーク旋回時の展開シナリオを2〜4パターン生成する。"""
+    G, _cs, W, _jycd, _jyname = get_venue_params(venue_code)
     n = len(df_scored)
     if n < 6:
         return []
@@ -1324,7 +1339,7 @@ def generate_tenkai_prediction(
     if c1_idx is None:
         return []
 
-    nige_score = _get_course_win_rate()[0]  # 当地の基礎イン逃げ率
+    nige_score = _get_course_win_rate(venue_code)[0]  # 当地の基礎イン逃げ率
 
     # ST優位性
     if mean_st is not None and not np.isnan(st_vals[c1_idx]):
@@ -1333,7 +1348,7 @@ def generate_tenkai_prediction(
         nige_score += st_adv * W.get("tenkai_st_factor", 2.0)
 
     # 風向効果
-    wind_eff = _get_wind_effect().get(wind_dir, {}).get(0, 0.0)
+    wind_eff = _get_wind_effect(venue_code).get(wind_dir, {}).get(0, 0.0)
     wind_mult = min(wind_speed / 3.0, 2.0)
     nige_score += wind_eff * wind_mult * W.get("tenkai_wind_factor", 0.05)
 
@@ -1406,7 +1421,7 @@ def generate_tenkai_prediction(
                 if st_vals[c1_idx] > mean_st + 0.01:
                     sashi_score *= 1.2
             # 横風→コース2差し有利
-            _wt_tenkai = _get_wind_effect()
+            _wt_tenkai = _get_wind_effect(venue_code)
             _w_in = _wt_tenkai.get(wind_dir, {}).get(0, 0.0)
             if cp == 1 and abs(_w_in) <= 0.5 and _wt_tenkai.get(wind_dir, {}).get(1, 0.0) > 0 and wind_speed >= 2:
                 sashi_score *= 1.15
@@ -1436,7 +1451,7 @@ def generate_tenkai_prediction(
                     makuri_score *= 1.2
             if tilts[idx] < -0.5:
                 makuri_score *= 1.15
-            _w_in_makuri = _get_wind_effect().get(wind_dir, {}).get(0, 0.0)
+            _w_in_makuri = _get_wind_effect(venue_code).get(wind_dir, {}).get(0, 0.0)
             if _w_in_makuri < -0.5 and wind_speed >= 2:
                 makuri_score *= 1.1
             if cp == 3:  # カドまくり
@@ -1618,12 +1633,16 @@ def predict(
     odds_2t: dict | None = None,
     racer_kimarite: dict | None = None,
     deadline: str | None = None,
+    venue_code: str = DEFAULT_VENUE,
 ) -> dict:
+    # 会場固有パラメータをローカルに取得
+    G, _cs, W, _jycd, _jyname = get_venue_params(venue_code)
+
     # 締め切り前後1時間以内でなければ気象条件をニュートラル化
     weather_reliable = _is_weather_reliable(deadline)
     scoring_weather = weather if weather_reliable else _neutralize_weather(weather)
 
-    scored = calculate_scores(df, scoring_weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite)
+    scored = calculate_scores(df, scoring_weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite, venue_code=venue_code)
 
     # 【v6】進入コース情報を取得し、決まり手連動補正に渡す
     course_positions = scored["_course_pos"].tolist() if "_course_pos" in scored.columns else None
@@ -1632,11 +1651,13 @@ def predict(
         scored, odds_dict=odds_dict,
         course_positions=course_positions,
         racer_kimarite=racer_kimarite,
+        venue_code=venue_code,
     )
     recs_2ren = generate_2ren_recommendations(
         scored, odds_2t=odds_2t,
         course_positions=course_positions,
         racer_kimarite=racer_kimarite,
+        venue_code=venue_code,
     )
 
     # 【v10】展開予想シナリオ生成
@@ -1644,6 +1665,7 @@ def predict(
         scored, scoring_weather,
         racer_kimarite=racer_kimarite,
         race_no=race_no,
+        venue_code=venue_code,
     )
 
     top_boat   = scored.sort_values("win_prob", ascending=False).iloc[0]
@@ -1655,7 +1677,7 @@ def predict(
     weather_note = "" if weather_reliable else "⏰ 気象データ未反映（締切1時間以上前）"
     is_stabilizer = weather.get("安定板", False)
     summary_lines = [
-        f"📍 {_cfg.JYNAME} {race_no}R 予想サマリ",
+        f"📍 {_jyname} {race_no}R 予想サマリ",
         f"🏆 グレード: {grade}" + (" / 優勝戦" if weather.get("is_final") else ""),
         f"💨 風速: {weather.get('風速','?')} / 風向: {weather.get('風向','?')} / 天気: {weather.get('天気','?')}"
         + (f"  ({weather_note})" if weather_note else ""),

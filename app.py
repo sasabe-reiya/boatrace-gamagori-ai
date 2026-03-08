@@ -24,12 +24,13 @@ APP_VERSION = "v3.1-20260304"
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as _cfg
-from config import VENUE_CONFIGS, set_venue, get_venue_config
+from config import VENUE_CONFIGS, get_venue_config
 from race_scraper import (
     fetch_full_race_data, fetch_race_card,
     fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
+    set_thread_venue,
 )
 from scorer import predict, get_wind_type
 from result_tracker import save_prediction
@@ -375,8 +376,8 @@ _ui_disabled = st.session_state.running
 
 # ── 会場設定（query_params から読み取り）─────────────────────────
 _selected_venue_code = st.query_params.get("venue", "07")
-set_venue(_selected_venue_code)
-_venue = get_venue_config()
+set_thread_venue(_selected_venue_code)
+_venue = get_venue_config(_selected_venue_code)
 
 # ── 会場名 + 変更ボタン + モード切替 ──────────────────────────────
 _hdr_cols = st.columns([3, 1])
@@ -646,7 +647,7 @@ if app_mode == "予想":
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
         # fetch_base_race_data は内部で3並列（soup+beforeinfo+gamagori_time）
         # その他5リクエストを同時に走らせる
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=10, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
             f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
             f_odds     = executor.submit(fetch_odds_3t, race_no, d_str, _selected_venue_code)
             f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str, _selected_venue_code)
@@ -697,7 +698,7 @@ if app_mode == "予想":
                     _course_map = _cm  # 枠番順と異なる場合のみ渡す
             _remaining = max(0, _avg_total - (time.time() - _t_start))
             progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=2, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
                 f_ext      = executor.submit(fetch_extended_player_data, reg_nos)
                 f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str, df_raw, course_map=_course_map)
 
@@ -728,6 +729,7 @@ if app_mode == "予想":
                     odds_2t=odds_2t,
                     racer_kimarite=racer_km,
                     deadline=deadline,
+                    venue_code=_selected_venue_code,
                 )
             except Exception as e:
                 progress_bar.progress(100, text="❌ 予想計算エラー")
@@ -982,7 +984,7 @@ if app_mode == "予想":
             weather_items = [
                 ("天気", w.get("天気", "-")),
                 ("波高", w.get("波高", "0cm")),
-                ("風向", (lambda d, t: d + f'<br><span style="font-size:0.7rem;color:#f0a500">({t})</span>' if t != "-" else d)(w.get("風向", "-"), get_wind_type(w.get("風向", "-")))),
+                ("風向", (lambda d, t: d + f'<br><span style="font-size:0.7rem;color:#f0a500">({t})</span>' if t != "-" else d)(w.get("風向", "-"), get_wind_type(w.get("風向", "-"), _selected_venue_code))),
                 ("風速", w.get("風速", "0m")),
                 ("気温", w.get("気温", "-")),
                 ("水温", w.get("水温", "-")),
@@ -2404,8 +2406,8 @@ if app_mode == "予想":
         st.markdown("---")
         # ── 予想パラメータ一覧 ────────────────────────────────────────
         with st.expander("📐 予想に使用しているパラメータ一覧", expanded=False):
-            _W = _cfg.SCORE_WEIGHTS
-            _G = _cfg.GAMAGORI_SETTINGS
+            _W = VENUE_CONFIGS[_selected_venue_code]["score_weights"]
+            _G = VENUE_CONFIGS[_selected_venue_code]["settings"]
 
             param_groups = [
                 ("コース・勝率", [
@@ -2600,7 +2602,7 @@ else:
         import requests as _requests
         _session = _requests.Session()
         _session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-        with ThreadPoolExecutor(max_workers=12) as executor:
+        with ThreadPoolExecutor(max_workers=12, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
             futures = {
                 executor.submit(fetch_race_card, rno, d_str_s, session=_session): rno
                 for rno in range(1, 13)

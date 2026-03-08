@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # ── 会場設定 ──────────────────────────────────────────────────────
-# 対応会場を VENUE_CONFIGS に定義。アクティブ会場は set_venue() で切り替える。
+# 対応会場を VENUE_CONFIGS に定義。会場設定は get_venue_params() で取得する。
 
 # boatrace.jp ベースURL
 BASE_URL = "https://www.boatrace.jp"
@@ -194,28 +194,37 @@ VENUE_CONFIGS = {
     },
 }
 
-# ── アクティブ会場（後方互換用グローバル変数）─────────────────────
-# app.py から set_venue() で切り替え。デフォルトは蒲郡。
-JYCD = "07"
+# ── デフォルト会場コード ─────────────────────────────────────────
+DEFAULT_VENUE = "07"
+
+# ── 後方互換用（backtester / tune_bayes 等の単体スクリプト向け） ──
+# Webアプリ（app.py / scorer.py）では使用しない。
+JYCD = DEFAULT_VENUE
 JYNAME = "蒲郡"
 GAMAGORI_SETTINGS = _GAMAGORI_SETTINGS
 GAMAGORI_COURSE_STATS = _GAMAGORI_COURSE_STATS
 SCORE_WEIGHTS = dict(_GAMAGORI_SCORE_WEIGHTS)
 
-def set_venue(jycd: str):
-    """アクティブ会場を切り替え、グローバル変数を更新する。"""
-    global JYCD, JYNAME, GAMAGORI_SETTINGS, GAMAGORI_COURSE_STATS, SCORE_WEIGHTS
-    cfg = VENUE_CONFIGS.get(jycd)
-    if cfg is None:
-        raise ValueError(f"未対応の会場コード: {jycd}")
-    JYCD = cfg["code"]
-    JYNAME = cfg["name"]
-    GAMAGORI_SETTINGS = cfg["settings"]
-    GAMAGORI_COURSE_STATS = cfg["course_stats"]
-    SCORE_WEIGHTS = dict(cfg["score_weights"])
-
 
 def get_venue_config(jycd: str | None = None) -> dict:
-    """指定会場（省略時はアクティブ会場）の設定辞書を返す。"""
-    code = jycd or JYCD
+    """指定会場（省略時はデフォルト会場）の設定辞書を返す。"""
+    code = jycd or DEFAULT_VENUE
     return VENUE_CONFIGS[code]
+
+
+def get_venue_params(jycd: str | None = None) -> tuple:
+    """会場固有の (settings, course_stats, score_weights, jycd, jyname) を返す。
+
+    グローバル変数を介さずスレッドセーフに会場設定を取得できる。
+    """
+    code = jycd or DEFAULT_VENUE
+    cfg = VENUE_CONFIGS.get(code)
+    if cfg is None:
+        raise ValueError(f"未対応の会場コード: {code}")
+    return (
+        cfg["settings"],
+        cfg["course_stats"],
+        dict(cfg["score_weights"]),
+        cfg["code"],
+        cfg["name"],
+    )
