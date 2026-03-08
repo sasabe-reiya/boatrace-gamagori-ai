@@ -867,21 +867,22 @@ if app_mode == "予想":
           bar.id = barId;
           bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;' +
             'background:linear-gradient(135deg,#0a1628 0%,#0d2855 100%);' +
-            'border-bottom:2px solid #f0a500;padding:6px 16px;' +
-            'display:flex;align-items:center;justify-content:center;gap:16px;' +
-            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+            'border-bottom:2px solid #f0a500;padding:4px 8px;' +
+            'display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;' +
+            'white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
 
-          var raceInfo = '<span style="color:#f0a500;font-size:1.2rem;font-weight:900;letter-spacing:1px">{_rno_disp}R</span>' +
-            '<span style="color:#aac8e8;font-size:0.8rem;margin-left:6px">{_date_fmt}</span>';
+          var raceInfo = '<span style="color:#aac8e8;font-size:0.7rem">{_venue["short_name"]}</span>' +
+            '<span style="color:#f0a500;font-size:0.85rem;font-weight:900;margin-left:4px">{_rno_disp}R</span>' +
+            '<span style="color:#aac8e8;font-size:0.7rem;margin-left:3px">{_date_fmt}</span>';
 
-          var deadlineInfo = '<span style="color:#ff9800;font-size:0.9rem">⏰ 締切 {_dl_time}</span>' +
-            '<span id="fixed-countdown" style="color:{_fixed_deadline_color};font-weight:bold;font-size:0.9rem;margin-left:8px">{_fixed_deadline_status}</span>';
+          var deadlineInfo = '<span style="color:#ff9800;font-size:0.75rem">締切{_dl_time}</span>' +
+            '<span id="fixed-countdown" style="color:{_fixed_deadline_color};font-weight:bold;font-size:0.75rem;margin-left:4px">{_fixed_deadline_status}</span>';
 
-          bar.innerHTML = raceInfo + '<span style="color:#2a4a80;font-size:1.2rem">|</span>' + deadlineInfo;
+          bar.innerHTML = raceInfo + '<span style="color:#2a4a80;font-size:0.9rem">|</span>' + deadlineInfo;
 
           var mainEl = window.parent.document.querySelector('section.main');
           if(mainEl) {{
-            mainEl.style.paddingTop = '44px';
+            mainEl.style.paddingTop = '36px';
           }}
           window.parent.document.body.appendChild(bar);
 
