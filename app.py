@@ -1422,7 +1422,7 @@ if app_mode == "予想":
             _f_html = (
                 f'<div style="display:flex;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
                 f'<div style="background:#e74c3c;color:#fff;font-weight:bold;font-size:0.9rem;'
-                f'padding:4px 10px;border-radius:6px;margin-right:8px;letter-spacing:2px">F</div>'
+                f'padding:4px 10px;border-radius:6px;margin-right:8px;font-size:0.75rem">2連単</div>'
                 f'{"".join(_f_html_parts)}'
                 f'</div>'
             )
@@ -1466,7 +1466,7 @@ if app_mode == "予想":
             _s_html = (
                 f'<div style="display:flex;align-items:center;flex-wrap:wrap">'
                 f'<div style="background:#3498db;color:#fff;font-weight:bold;font-size:0.9rem;'
-                f'padding:4px 10px;border-radius:6px;margin-right:8px;letter-spacing:2px">S</div>'
+                f'padding:4px 10px;border-radius:6px;margin-right:8px;font-size:0.75rem">3連単</div>'
                 f'{"".join(_s_html_parts)}'
                 f'</div>'
             )
@@ -1477,7 +1477,6 @@ if app_mode == "予想":
                 '<span style="color:#e74c3c">■</span> 本命　'
                 '<span style="color:#3498db">■</span> 対抗　'
                 '<span style="color:#2ecc71">■</span> 穴　|　'
-                'F = 2連単　S = 3連単　|　'
                 '<span style="border:2px solid #ffe066;border-radius:4px;padding:0 3px;font-size:0.6rem">枠</span> = 軸'
                 '</div>'
             )

@@ -1250,11 +1250,12 @@ def generate_focus_formation(
             "グループ": info["group"],
         })
     f_rows.sort(key=lambda x: x["的中確率"], reverse=True)
+    f_rows = f_rows[:3]  # 2連単は上位3点
 
     # ── S行: 3連単フォーメーション ──
-    # 1着-2着軸から3着候補を展開して表示
+    # 1着-2着軸から3着候補を展開して表示（上位4点）
     s_rows = []
-    for rec in recommendations:
+    for rec in recommendations[:4]:
         first = rec["1着艇"]
         second = rec["2着艇"]
         third = rec["3着艇"]
