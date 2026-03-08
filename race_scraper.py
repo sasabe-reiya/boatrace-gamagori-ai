@@ -423,7 +423,13 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
 
     # ── 住之江公式リアルタイム気象で上書き（住之江のみ）──────────
     if _cfg.get_venue_config().get("has_official_weather"):
-        sw = fetch_suminoe_weather()
+        _venue_code = _cfg.get_venue_config().get("code", "")
+        if _venue_code == "12":
+            sw = fetch_suminoe_weather()
+        elif _venue_code == "24":
+            sw = fetch_omura_weather(race_no, date_str)
+        else:
+            sw = None
         if sw:
             for k in ("天気", "風速", "風向", "波高", "気温", "水温"):
                 weather[k] = sw[k]
@@ -677,7 +683,7 @@ def apply_extended_data(final_df: pd.DataFrame, ext_data: dict) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # 4. 3連単オッズ取得
 # ─────────────────────────────────────────────
-def fetch_odds_3t(race_no: int, date_str: str | None = None) -> dict:
+def fetch_odds_3t(race_no: int, date_str: str | None = None, jycd: str | None = None) -> dict:
     """
     boatrace.jp の odds3t ページから3連単オッズを取得する。
 
@@ -696,7 +702,7 @@ def fetch_odds_3t(race_no: int, date_str: str | None = None) -> dict:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds3t"
-    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
+    params = {"jcd": jycd or _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return {}
@@ -787,7 +793,7 @@ def fetch_odds_3t(race_no: int, date_str: str | None = None) -> dict:
 # ─────────────────────────────────────────────
 # 4b. 2連単・2連複オッズ取得
 # ─────────────────────────────────────────────
-def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
+def fetch_odds_2tf(race_no: int, date_str: str | None = None, jycd: str | None = None) -> dict:
     """
     boatrace.jp の odds2tf ページから2連単・2連複オッズを取得する。
     同一ページに両方のテーブルが存在する。
@@ -804,7 +810,7 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None) -> dict:
         date_str = datetime.now().strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds2tf"
-    params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
+    params = {"jcd": jycd or _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
     if not soup:
         return {"2連単": {}, "2連複": {}}
@@ -1504,10 +1510,61 @@ def fetch_suminoe_time(race_no: int, date_str: str | None = None) -> pd.DataFram
 
 
 # ─────────────────────────────────────────────
-# 11c. 大村公式サイト：オリジナル展示タイム取得
+# 11c. 大村公式サイト：リアルタイム気象データ＋オリジナル展示タイム取得
 # ─────────────────────────────────────────────
 
 OMURA_EXHIBIT_URL = "https://omurakyotei.jp/yosou/include/new_top_iframe_chokuzen_2.php"
+
+
+def fetch_omura_weather(race_no: int = 1, date_str: str | None = None) -> dict | None:
+    """大村競艇公式サイト (omurakyotei.jp) の直前情報ページから気象データを取得する。
+    データは【天候】晴れ【気温】１０度 ... のようにテキストで埋め込まれている。
+    失敗時は None を返す。"""
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    url = f"{OMURA_EXHIBIT_URL}?day={date_str}&race={race_no:02d}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except Exception:
+        return None
+
+    # HTMLタグを除去してプレーンテキストから【キー】値 を抽出
+    soup = BeautifulSoup(resp.text, "lxml")
+    text = soup.get_text()
+
+    pairs = re.findall(r'【(.+?)】([^【]*)', text)
+    if not pairs:
+        return None
+
+    raw = {}
+    for key, val in pairs:
+        # 改行以降のゴミを除去
+        raw[key.strip()] = val.strip().split("\n")[0].strip()
+
+    # 全角数字→半角、「度」「センチ」「Ｍ」を正規化
+    def _normalize(s: str) -> str:
+        s = s.translate(str.maketrans('０１２３４５６７８９．', '0123456789.'))
+        s = s.replace('度', '℃').replace('センチ', 'cm').replace('Ｍ', 'm').replace('ｍ', 'm')
+        return s.strip()
+
+    tenki = raw.get("天候", "-")
+    kion  = _normalize(raw.get("気温", "-"))
+    suion = _normalize(raw.get("水温", "-"))
+    nami  = _normalize(raw.get("波高", "-"))
+    kaze_dir = raw.get("風向", "-")
+    kaze_spd = _normalize(raw.get("風速", "-"))
+
+    return {
+        "天気": tenki,
+        "風向": kaze_dir,
+        "風速": kaze_spd,
+        "波高": nami,
+        "気温": kion,
+        "水温": suion,
+    }
 
 
 def fetch_omura_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:

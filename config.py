@@ -189,7 +189,7 @@ VENUE_CONFIGS = {
         "has_original_exhibit": True,     # 大村公式サイト展示タイム (omurakyotei.jp)
         "has_taka_yoso": False,
         "has_iot_weather": False,
-        "has_official_weather": False,
+        "has_official_weather": True,     # 大村公式サイト気象データ
         "official_site": "https://omurakyotei.jp",
     },
 }

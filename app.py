@@ -648,8 +648,8 @@ if app_mode == "予想":
         # その他5リクエストを同時に走らせる
         with ThreadPoolExecutor(max_workers=10) as executor:
             f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
-            f_odds     = executor.submit(fetch_odds_3t, race_no, d_str)
-            f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str)
+            f_odds     = executor.submit(fetch_odds_3t, race_no, d_str, _selected_venue_code)
+            f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str, _selected_venue_code)
             f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str) if _venue.get("has_taka_yoso") else None
             f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
             f_lady     = executor.submit(fetch_lady_racers, d_str)
@@ -1200,7 +1200,7 @@ if app_mode == "予想":
                     if st.button("オッズ更新", key="odds_refresh_btn", use_container_width=True):
                         _ar_rno = st.session_state.race_no
                         _ar_dstr = st.session_state.date_str
-                        _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr)
+                        _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr, jycd=_selected_venue_code)
                         if _ar_odds:
                             st.session_state.odds = _ar_odds
                             _ar_3t = st.session_state.result.get("all_3t_candidates", [])
@@ -2142,7 +2142,7 @@ if app_mode == "予想":
                         if st.button("オッズ更新", key="odds_refresh_btn2", use_container_width=True):
                             _ar_rno = st.session_state.race_no
                             _ar_dstr = st.session_state.date_str
-                            _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr)
+                            _ar_odds = fetch_odds_3t(_ar_rno, _ar_dstr, jycd=_selected_venue_code)
                             if _ar_odds:
                                 st.session_state.odds = _ar_odds
                                 _odds_cur = _ar_odds
