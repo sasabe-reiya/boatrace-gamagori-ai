@@ -86,6 +86,7 @@ def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t,
             "scored_cols": scored_cols,
             "recommendations": result.get("recommendations", []),
             "all_3t_candidates": result.get("all_3t_candidates", []),
+            "focus_formation": result.get("focus_formation", {}),
             "tenkai_scenarios": result.get("tenkai_scenarios", []),
             "weather": weather,
             "deadline": deadline,
@@ -117,6 +118,7 @@ def _load_result_cache(race_no, d_str, device_id=""):
             "scored_df": scored_df,
             "recommendations": cache.get("recommendations", []),
             "all_3t_candidates": cache.get("all_3t_candidates", []),
+            "focus_formation": cache.get("focus_formation", {}),
             "tenkai_scenarios": cache.get("tenkai_scenarios", []),
         }
         return {
@@ -1369,6 +1371,123 @@ if app_mode == "予想":
                     st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
 
         _render_3t_section()
+
+        # ── FOCUS フォーメーション買い目 ──────────────────────────────
+        _focus = st.session_state.result.get("focus_formation", {})
+        _focus_f = _focus.get("F", [])
+        _focus_s = _focus.get("S", [])
+        if _focus_f or _focus_s:
+            st.markdown("---")
+            _n_f = _focus.get("点数_F", 0)
+            _n_s = _focus.get("点数_S", 0)
+            st.markdown(
+                f'### FOCUS <span style="color:#888;font-size:0.8rem;margin-left:8px">'
+                f'2連単 {_n_f}点 / 3連単 {_n_s}点 = 計 {_n_f + _n_s}点</span>',
+                unsafe_allow_html=True,
+            )
+
+            _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
+            _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+            _GRP_COLOR = {"本命": "#e74c3c", "対抗": "#3498db", "穴": "#2ecc71"}
+
+            def _focus_badge(num: str, is_axis: bool = False) -> str:
+                bg = _FBG.get(num, "#555")
+                fg = _FFG.get(num, "#fff")
+                border = "border:2px solid #ffe066;" if is_axis else ""
+                return (
+                    f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                    f'width:24px;height:24px;min-width:24px;border-radius:5px;'
+                    f'background:{bg};color:{fg};font-weight:bold;font-size:0.85rem;'
+                    f'{border}margin:0 1px">{num}</span>'
+                )
+
+            # ── F行（2連単） ──
+            _f_html_parts = []
+            for row in _focus_f:
+                parts = row["買い目"].split("-")
+                grp = row.get("グループ", "")
+                gc = _GRP_COLOR.get(grp, "#888")
+                badges = _focus_badge(parts[0], is_axis=True) + (
+                    f'<span style="color:#888;margin:0 1px;font-size:0.7rem">-</span>'
+                ) + _focus_badge(parts[1])
+                _f_html_parts.append(
+                    f'<div style="display:inline-flex;align-items:center;background:#0e1a2e;'
+                    f'border:1px solid {gc};border-radius:8px;padding:4px 8px;margin:3px 4px">'
+                    f'{badges}'
+                    f'<span style="color:{gc};font-size:0.6rem;margin-left:5px;white-space:nowrap">'
+                    f'{row["的中確率"]:.1f}%</span>'
+                    f'</div>'
+                )
+
+            _f_html = (
+                f'<div style="display:flex;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+                f'<div style="background:#e74c3c;color:#fff;font-weight:bold;font-size:0.9rem;'
+                f'padding:4px 10px;border-radius:6px;margin-right:8px;letter-spacing:2px">F</div>'
+                f'{"".join(_f_html_parts)}'
+                f'</div>'
+            )
+
+            # ── S行（3連単） ──
+            _s_html_parts = []
+            for row in _focus_s:
+                combo = row["買い目"]  # "1-3=2"
+                # parse: first-second=third
+                if "=" in combo:
+                    axis_part, third = combo.split("=")
+                    first, second = axis_part.split("-")
+                else:
+                    parts = combo.split("-")
+                    first, second, third = parts[0], parts[1], parts[2] if len(parts) > 2 else "?"
+                grp = row.get("グループ", "")
+                gc = _GRP_COLOR.get(grp, "#888")
+                badges = (
+                    _focus_badge(first, is_axis=True)
+                    + f'<span style="color:#888;margin:0 1px;font-size:0.7rem">-</span>'
+                    + _focus_badge(second, is_axis=True)
+                    + f'<span style="color:#888;margin:0 1px;font-size:0.7rem">=</span>'
+                    + _focus_badge(third)
+                )
+                ev = row.get("期待値")
+                ev_badge = ""
+                if ev is not None and ev >= 1.0:
+                    ev_badge = (
+                        f'<span style="color:#2ecc71;font-size:0.55rem;margin-left:3px">EV{ev:.1f}</span>'
+                    )
+                _s_html_parts.append(
+                    f'<div style="display:inline-flex;align-items:center;background:#0e1a2e;'
+                    f'border:1px solid {gc};border-radius:8px;padding:4px 8px;margin:3px 4px">'
+                    f'{badges}'
+                    f'<span style="color:{gc};font-size:0.6rem;margin-left:5px;white-space:nowrap">'
+                    f'{row["的中確率"]:.2f}%</span>'
+                    f'{ev_badge}'
+                    f'</div>'
+                )
+
+            _s_html = (
+                f'<div style="display:flex;align-items:center;flex-wrap:wrap">'
+                f'<div style="background:#3498db;color:#fff;font-weight:bold;font-size:0.9rem;'
+                f'padding:4px 10px;border-radius:6px;margin-right:8px;letter-spacing:2px">S</div>'
+                f'{"".join(_s_html_parts)}'
+                f'</div>'
+            )
+
+            # 凡例
+            _legend = (
+                '<div style="font-size:0.7rem;color:#666;margin-top:8px">'
+                '<span style="color:#e74c3c">■</span> 本命　'
+                '<span style="color:#3498db">■</span> 対抗　'
+                '<span style="color:#2ecc71">■</span> 穴　|　'
+                'F = 2連単　S = 3連単　|　'
+                '<span style="border:2px solid #ffe066;border-radius:4px;padding:0 3px;font-size:0.6rem">枠</span> = 軸'
+                '</div>'
+            )
+
+            st.markdown(
+                f'<div style="background:#111a2e;border:1px solid #2a4a80;border-radius:10px;'
+                f'padding:12px 14px;margin:8px 0">'
+                f'{_f_html}{_s_html}{_legend}</div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 

@@ -1198,6 +1198,85 @@ def generate_recommendations(
 
 
 # ────────────────────────────────────────────────────────────────
+# FOCUS フォーメーション買い目生成
+# ────────────────────────────────────────────────────────────────
+
+def generate_focus_formation(
+    recommendations: list[dict],
+    all_2ren: list[dict] | None = None,
+) -> dict:
+    """
+    3連単・2連単の推奨買い目からFOCUSフォーメーション形式を生成する。
+
+    Returns
+    -------
+    {
+      "F": [{"買い目": "1-3", "的中確率": ..., "グループ": "本命"}, ...],  # 2連単フォーメーション
+      "S": [{"買い目": "1-3=2", "的中確率": ..., "グループ": "本命"}, ...],  # 3連単フォーメーション
+      "点数_F": int,  # F行の点数
+      "点数_S": int,  # S行の点数
+    }
+    """
+    if not recommendations:
+        return {"F": [], "S": [], "点数_F": 0, "点数_S": 0}
+
+    # ── F行: 2連単フォーメーション ──
+    # 3連単の推奨買い目から1着-2着ペアを抽出（重複除去・確率合算）
+    pair_map = {}  # "1-3" -> {"prob": float, "group": str}
+    for rec in recommendations:
+        first = rec["1着艇"]
+        second = rec["2着艇"]
+        key = f"{first}-{second}"
+        if key not in pair_map:
+            pair_map[key] = {
+                "prob": rec["的中確率"],
+                "group": rec["グループ"],
+            }
+        else:
+            pair_map[key]["prob"] += rec["的中確率"]
+
+    # 2連単オッズがあれば確率を上書き
+    if all_2ren:
+        ren_prob = {r["買い目"]: r["的中確率"] for r in all_2ren}
+        for key in pair_map:
+            if key in ren_prob:
+                pair_map[key]["prob"] = ren_prob[key]
+
+    f_rows = []
+    for key, info in pair_map.items():
+        f_rows.append({
+            "買い目": key,
+            "的中確率": round(info["prob"], 2),
+            "グループ": info["group"],
+        })
+    f_rows.sort(key=lambda x: x["的中確率"], reverse=True)
+
+    # ── S行: 3連単フォーメーション ──
+    # 1着-2着軸から3着候補を展開して表示
+    s_rows = []
+    for rec in recommendations:
+        first = rec["1着艇"]
+        second = rec["2着艇"]
+        third = rec["3着艇"]
+        s_rows.append({
+            "買い目": f"{first}-{second}={third}",
+            "的中確率": rec["的中確率"],
+            "公正オッズ": rec["公正オッズ"],
+            "実オッズ": rec.get("実オッズ"),
+            "期待値": rec.get("期待値"),
+            "グループ": rec["グループ"],
+            "タイプ": rec["タイプ"],
+        })
+
+    return {
+        "F": f_rows,
+        "S": s_rows,
+        "点数_F": len(f_rows),
+        "点数_S": len(s_rows),
+    }
+
+
+# ────────────────────────────────────────────────────────────────
 # 2連単推奨買い目生成 【v3新規】
 # ────────────────────────────────────────────────────────────────
 
@@ -1660,6 +1739,12 @@ def predict(
         venue_code=venue_code,
     )
 
+    # FOCUS フォーメーション生成
+    focus = generate_focus_formation(
+        recs,
+        all_2ren=recs_2ren.get("2連単"),
+    )
+
     # 【v10】展開予想シナリオ生成
     tenkai_scenarios = generate_tenkai_prediction(
         scored, scoring_weather,
@@ -1701,6 +1786,7 @@ def predict(
         "recommendations":    recs,
         "all_3t_candidates":  all_3t,
         "recommendations_2ren": recs_2ren,
+        "focus_formation":    focus,
         "tenkai_scenarios":   tenkai_scenarios,
         "summary":            "\n".join(summary_lines),
     }
