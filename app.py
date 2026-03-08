@@ -176,12 +176,16 @@ if "venue" not in st.query_params:
     st.markdown("")
 
     st.markdown('<style>[data-testid="stButton"] button[kind="primary"] { padding: 2.5rem 1rem; font-size: 1.1rem; color: #0a1628 !important; font-weight: bold; }</style>', unsafe_allow_html=True)
-    _vs_cols = st.columns(len(VENUE_CONFIGS))
-    for i, (code, vcfg) in enumerate(VENUE_CONFIGS.items()):
-        with _vs_cols[i]:
-            if st.button(f'{vcfg["short_name"]}\n{vcfg["en_name"]}', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
-                st.query_params["venue"] = code
-                st.rerun()
+    _venue_list = list(VENUE_CONFIGS.items())
+    # 2列ずつ表示（狭い画面でも全会場が見えるように）
+    for row_start in range(0, len(_venue_list), 2):
+        row_items = _venue_list[row_start:row_start + 2]
+        _vs_cols = st.columns(2)
+        for i, (code, vcfg) in enumerate(row_items):
+            with _vs_cols[i]:
+                if st.button(f'{vcfg["short_name"]}\n{vcfg["en_name"]}', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
+                    st.query_params["venue"] = code
+                    st.rerun()
     st.stop()
 
 st.markdown("""
