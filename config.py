@@ -122,6 +122,32 @@ _SUMINOE_SCORE_WEIGHTS.update({
     "calm_in_boost":     0.0,
 })
 
+# ══════════════════════════════════════════════════════════════════
+#  大村（ナイター）
+# ══════════════════════════════════════════════════════════════════
+_OMURA_SETTINGS = {
+    "night_race_start":       9,   # ナイターレース（蒲郡と同様）
+    "calm_wind_threshold":    2.5,
+    "base_kado_rate":         16.0,   # 大村はイン逃げが強くカド率は低め
+    "base_makuri_sashi_rate": 12.0,
+    "night_nige_boost":       1.10,   # ナイター＋静水面でイン有利
+}
+
+# 大村 進入コース別成績（公式データに基づく概算値）
+_OMURA_COURSE_STATS = {
+    1: {"1着": 62.0, "2着": 14.5, "3着":  8.0, "4着":  6.5, "5着":  4.5, "6着":  3.5},
+    2: {"1着":  9.5, "2着": 22.5, "3着": 19.0, "4着": 17.5, "5着": 17.0, "6着": 13.5},
+    3: {"1着": 10.5, "2着": 21.0, "3着": 18.5, "4着": 18.0, "5着": 16.0, "6着": 15.0},
+    4: {"1着": 11.0, "2着": 19.0, "3着": 20.5, "4着": 19.0, "5着": 16.5, "6着": 13.0},
+    5: {"1着":  5.5, "2着": 15.5, "3着": 19.5, "4着": 20.0, "5着": 22.5, "6着": 16.0},
+    6: {"1着":  1.5, "2着":  7.5, "3着": 14.5, "4着": 19.0, "5着": 23.5, "6着": 33.0},
+}
+
+_OMURA_SCORE_WEIGHTS = dict(_SCORE_WEIGHTS_BASE)
+_OMURA_SCORE_WEIGHTS.update({
+    "course_base":       [62.0, 9.5, 10.5, 11.0, 5.5, 1.5],  # 大村1着率
+    "taka_boost":        0.0,   # 高橋アナ予想は蒲郡のみ
+})
 
 # ── 会場マスタ ──────────────────────────────────────────────────
 VENUE_CONFIGS = {
@@ -151,6 +177,20 @@ VENUE_CONFIGS = {
         "has_iot_weather": False,
         "has_official_weather": True,    # 住之江公式サイト気象データ
         "official_site": "https://www.boatrace-suminoe.jp/asp/suminoe/kyogi/kyogihtml",
+    },
+    "24": {
+        "code": "24",
+        "name": "大村",
+        "short_name": "大村",
+        "en_name": "OMURA BOATRACE",
+        "settings": _OMURA_SETTINGS,
+        "course_stats": _OMURA_COURSE_STATS,
+        "score_weights": _OMURA_SCORE_WEIGHTS,
+        "has_original_exhibit": True,     # 大村公式サイト展示タイム (omurakyotei.jp)
+        "has_taka_yoso": False,
+        "has_iot_weather": False,
+        "has_official_weather": False,
+        "official_site": "https://omurakyotei.jp",
     },
 }
 

@@ -487,6 +487,8 @@ def _submit_original_exhibit(executor, venue_cfg: dict, race_no: int, date_str: 
     code = venue_cfg.get("code", "")
     if code == "12":
         return executor.submit(fetch_suminoe_time, race_no, date_str)
+    if code == "24":
+        return executor.submit(fetch_omura_time, race_no, date_str)
     return executor.submit(fetch_gamagori_time, race_no, date_str)
 
 
@@ -1498,6 +1500,83 @@ def fetch_suminoe_time(race_no: int, date_str: str | None = None) -> pd.DataFram
             "直線タイム":     None,
         })
 
+    return pd.DataFrame(rows)
+
+
+# ─────────────────────────────────────────────
+# 11c. 大村公式サイト：オリジナル展示タイム取得
+# ─────────────────────────────────────────────
+
+OMURA_EXHIBIT_URL = "https://omurakyotei.jp/yosou/include/new_top_iframe_chokuzen_2.php"
+
+
+def fetch_omura_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:
+    """
+    大村競艇公式サイト (omurakyotei.jp) の直前情報iframeから展示タイムデータを取得する。
+
+    データソース: /yosou/include/new_top_iframe_chokuzen_2.php?day=YYYYMMDD&race=RR
+
+    テーブル構造（th2列 + td9列）:
+      th: [0]枠番 [1]選手名
+      td: [0]ST [1]展示T [2]一周 [3]回り足 [4]直線 [5]チルト [6]部品交換 [7]スタート [8]展示評価
+
+    Returns
+    -------
+    DataFrame with columns: 枠番, 展示タイム_gama, 一周タイム, まわり足タイム, 直線タイム
+    空DataFrameの場合はデータ取得失敗。
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    url = f"{OMURA_EXHIBIT_URL}?day={date_str}&race={race_no:02d}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except Exception as e:
+        print(f"[omura] 展示データ取得失敗 {url}: {e}")
+        return pd.DataFrame()
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    tbl = soup.find("table")
+    if not tbl:
+        return pd.DataFrame()
+
+    # テーブル構造: 各艇は th(tei1〜tei6) + td9列
+    # td: [0]ST [1]展示T [2]一周 [3]回り足 [4]直線 [5]チルト [6]部品交換 [7]スタート [8]評価
+    rows = []
+    for tr in tbl.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 5:
+            continue
+
+        # 枠番をth要素のCSSクラスから取得 (tei1〜tei6)
+        th = tr.find("th")
+        waku = None
+        if th:
+            for cls in th.get("class", []):
+                m = re.search(r'tei(\d)', cls)
+                if m:
+                    waku = m.group(1)
+                    break
+        if waku not in ("1", "2", "3", "4", "5", "6"):
+            continue
+
+        tenji    = _to_float(tds[1].get_text())
+        isshu    = _to_float(tds[2].get_text())
+        mawari   = _to_float(tds[3].get_text())
+        chokusen = _to_float(tds[4].get_text())
+
+        rows.append({
+            "枠番":          waku,
+            "展示タイム_gama": tenji,
+            "一周タイム":     isshu,
+            "まわり足タイム": mawari,
+            "直線タイム":     chokusen,
+        })
+
+    if rows:
+        print(f"[omura] 展示タイム取得成功: {len(rows)}艇")
     return pd.DataFrame(rows)
 
 
