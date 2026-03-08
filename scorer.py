@@ -1225,72 +1225,61 @@ def generate_focus_formation(
     if not honmei:
         honmei = recommendations[:4]
 
-    # ── F行: 2連単フォーメーション（本命から抽出） ──
-    pair_map = {}  # "1-3" -> {"prob": float}
-    for rec in honmei:
-        first = rec["1着艇"]
-        second = rec["2着艇"]
-        key = f"{first}-{second}"
-        if key not in pair_map:
-            pair_map[key] = {"prob": rec["的中確率"]}
-        else:
-            pair_map[key]["prob"] += rec["的中確率"]
+    # ── F行: 2連単 2行 ──
+    # 全候補から2連単ペアを抽出し、折り返し統合
+    all_pairs = []
+    pair_seen = set()
+    for rec in recommendations:
+        pair = (rec["1着艇"], rec["2着艇"])
+        if pair not in pair_seen:
+            pair_seen.add(pair)
+            all_pairs.append(pair)
 
-    # 2連単オッズがあれば確率を上書き
-    if all_2ren:
-        ren_prob = {r["買い目"]: r["的中確率"] for r in all_2ren}
-        for key in pair_map:
-            if key in ren_prob:
-                pair_map[key]["prob"] = ren_prob[key]
-
+    used_f = set()
     f_rows = []
-    for key, info in pair_map.items():
-        f_rows.append({
-            "買い目": key,
-            "的中確率": round(info["prob"], 2),
-        })
-    f_rows.sort(key=lambda x: x["的中確率"], reverse=True)
-    f_rows = f_rows[:3]  # 2連単は上位3点
+    for first, second in all_pairs:
+        if (first, second) in used_f:
+            continue
+        reverse = (second, first)
+        if reverse in pair_seen and reverse not in used_f:
+            f_rows.append({"買い目": f"{first}={second}"})
+            used_f.add((first, second))
+            used_f.add(reverse)
+        else:
+            f_rows.append({"買い目": f"{first}-{second}"})
+            used_f.add((first, second))
+        if len(f_rows) >= 2:
+            break
 
-    # ── S行: 3連単フォーメーション（本命から折り返し統合） ──
-    # 同じ1着で2着と3着が入れ替わったペアがあれば「=」で統合
-    # 例: 1-2-3 と 1-3-2 が両方あれば → 1-2=3 (2点分)
-    combo_set = set()
-    combo_list = []
-    for rec in honmei[:4]:
-        combo_list.append((rec["1着艇"], rec["2着艇"], rec["3着艇"], rec))
-        combo_set.add((rec["1着艇"], rec["2着艇"], rec["3着艇"]))
+    # ── S行: 3連単 4行 ──
+    # 全候補から折り返し統合して4行
+    all_combos = []
+    combo_seen = set()
+    for rec in recommendations:
+        key = (rec["1着艇"], rec["2着艇"], rec["3着艇"])
+        if key not in combo_seen:
+            combo_seen.add(key)
+            all_combos.append(key)
 
-    used = set()
+    used_s = set()
     s_rows = []
-    for first, second, third, rec in combo_list:
-        key = (first, second, third)
-        if key in used:
+    for first, second, third in all_combos:
+        if (first, second, third) in used_s:
             continue
         reverse_key = (first, third, second)
-        if reverse_key in combo_set and reverse_key not in used:
-            # 折り返しペアあり → 「=」表記（2点分）
-            s_rows.append({
-                "買い目": f"{first}-{second}={third}",
-                "点数": 2,
-            })
-            used.add(key)
-            used.add(reverse_key)
+        if reverse_key in combo_seen and reverse_key not in used_s:
+            s_rows.append({"買い目": f"{first}-{second}={third}"})
+            used_s.add((first, second, third))
+            used_s.add(reverse_key)
         else:
-            # 単独 → 「-」表記（1点）
-            s_rows.append({
-                "買い目": f"{first}-{second}-{third}",
-                "点数": 1,
-            })
-            used.add(key)
-
-    total_s = sum(r["点数"] for r in s_rows)
+            s_rows.append({"買い目": f"{first}-{second}-{third}"})
+            used_s.add((first, second, third))
+        if len(s_rows) >= 4:
+            break
 
     return {
         "F": f_rows,
         "S": s_rows,
-        "点数_F": len(f_rows),
-        "点数_S": total_s,
     }
 
 
