@@ -12,6 +12,7 @@ font = "sans serif"
 
 [client]
 toolbarMode = "viewer"
+showErrorDetails = true
 
 [browser]
 gatherUsageStats = false
