@@ -147,6 +147,32 @@ _OMURA_SCORE_WEIGHTS = dict(_SCORE_WEIGHTS_BASE)
 _OMURA_SCORE_WEIGHTS.update({
     "course_base":       [62.0, 9.5, 10.5, 11.0, 5.5, 1.5],  # 大村1着率
     "taka_boost":        0.0,   # 高橋アナ予想は蒲郡のみ
+    # ── 大村チューニング結果 (155レース, 2026-01-27〜2026-03-03) ──
+    "individual_temp":   6.073,
+    "win_rate":          1.597,
+    "local_win_rate":    0.768,
+    "nat2_rate":         3.93,
+    "loc2_rate":         0.451,
+    "exhibit_time":      0.86,
+    "exhibit_top_bonus": 3.185,
+    "night_boost":       0.0,
+    "calm_in_boost":     0.0,
+    "st_weight":         31.074,
+    "motor2_rate":       3.289,
+    "boat2_rate":        0.871,
+    "course_win_rate":   1.914,
+    "momentum":          2.047,
+    "mawari_time":       1.147,
+    "chokusen_time":     1.43,
+    "turn_master_bonus": 1.925,
+    "fl_f_penalty":      2.577,
+    "kado_boost":        0.715,
+    "makuri_sashi":      2.353,
+    "rank_a1":           1.788,
+    "rank_a2":           1.425,
+    "stabilizer_in_boost": 3.421,
+    "stabilizer_equalize": 0.139,
+    "prob_cap":          85.0,
 })
 
 # ── 会場マスタ ──────────────────────────────────────────────────
