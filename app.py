@@ -621,7 +621,7 @@ if app_mode == "予想":
         _run_date_fmt = race_date.strftime("%Y年%m月%d日") if hasattr(race_date, "strftime") else str(race_date)
         with _settings_ph.container():
             st.markdown(
-                f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
+                f'<div id="running-indicator" style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
                 f'padding:0.7rem 1rem;margin-bottom:0.5rem;text-align:center">'
                 f'<span style="color:#7ab8e8;font-size:0.85rem">'
                 f'📡 {_run_date_fmt} <b>{race_no}R</b> の予想を実行中…</span>'
@@ -782,7 +782,17 @@ if app_mode == "予想":
                 device_id=_device_id,
             )
 
-            # 設定パネルをたたんで再描画
+            # 停止ボタン・実行中表示をJSで即座に非表示（rerun完了前のラグ防止）
+            _st_html("""<script>
+            (function(){
+                var doc = window.parent.document;
+                var ind = doc.getElementById('running-indicator');
+                if(ind){
+                    var wrap = ind.closest('[data-testid="stVerticalBlockBorderWrapper"]');
+                    if(wrap) wrap.style.display='none';
+                }
+            })();
+            </script>""", height=0)
             st.session_state.show_settings = False
             st.session_state.running = False
             st.session_state.pop("_exec_race_no", None)
@@ -1196,7 +1206,7 @@ if app_mode == "予想":
             with _hdr_col1:
                 _lr_text = ""
                 if st.session_state.odds_last_refresh_time > 0:
-                    _lr = datetime.fromtimestamp(st.session_state.odds_last_refresh_time)
+                    _lr = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=timezone(timedelta(hours=9)))
                     _lr_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr.strftime("%H:%M:%S")}</span>'
                 st.markdown(f"### 🎯 3連単 予想{_lr_text}", unsafe_allow_html=True)
             with _hdr_col2:
@@ -1238,23 +1248,112 @@ if app_mode == "予想":
             if _rr and _rr.get("払戻", {}).get("3連単"):
                 _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
 
-            def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "", start_num: int = 1) -> str:
-                """3連単テーブルのHTML文字列を生成する。"""
+            def _calc_bet_alloc(candidates: list[dict], budget: int) -> dict:
+                """確率上位から連続で買い、トリガミなしで配分する。
+
+                ルール:
+                  1) 確率順で上から連続で買う（飛ばさない）
+                  2) どの買い目が当たっても払戻 ≧ 投資総額（トリガミなし）
+                  3) 最低配分 = ceil(投資総額 ÷ オッズ) を確保後、残りをEV加重
+                  4) 点数は的中率増分2%以上 かつ トリガミなし配分が予算内に収まる範囲
+                Returns: {combo_str: allocation_yen, ...}
+                """
+                import math
+                _min_prob = 1.0  # 的中確率1%未満は買わない
+                buyable = [c for c in candidates
+                           if c.get("実オッズ") is not None and c.get("的中確率", 0) >= _min_prob]
+                if not buyable:
+                    return {}
+
+                # ── 買える最大点数を決定（上限10点） ──
+                # 最低払戻 ≧ 投資額×1.5 を保証する配分が予算内に収まる最大N点
+                # → オッズが低い（本命決着型）→ 少点数
+                # → オッズが高い（混戦型）→ 多点数
+                _min_return_ratio = 1.3
+                final_n = 0
+                for n in range(1, min(len(buyable), 10) + 1):
+                    subset = buyable[:n]
+                    min_total = sum(
+                        math.ceil(budget * _min_return_ratio / c["実オッズ"] / 100) * 100
+                        for c in subset
+                    )
+                    if min_total <= budget:
+                        final_n = n
+                    else:
+                        break
+
+                if final_n == 0:
+                    # 1点も買えない場合（オッズが低すぎ）→ 1点だけ
+                    if buyable:
+                        return {buyable[0]["買い目"]: budget}
+                    return {}
+
+                selected = buyable[:final_n]
+
+                # ── 配分: 最低払戻保証額を確保 + 残りをEV加重 ──
+                alloc = {}
+                for c in selected:
+                    min_alloc = math.ceil(budget * _min_return_ratio / c["実オッズ"] / 100) * 100
+                    alloc[c["買い目"]] = min_alloc
+
+                remaining = budget - sum(alloc.values())
+
+                if remaining >= 100:
+                    # 残り予算をEV加重で上乗せ
+                    weights = {}
+                    for c in selected:
+                        ev = c.get("期待値") or 0
+                        weights[c["買い目"]] = max(ev, 0.1)
+                    total_w = sum(weights.values())
+                    for combo, w in weights.items():
+                        extra = round(w / total_w * remaining / 100) * 100
+                        if extra >= 100:
+                            alloc[combo] += extra
+                    # 端数超過の調整（最低保証額を守りつつ最大配分から削減）
+                    _min_alloc = {c["買い目"]: math.ceil(budget * _min_return_ratio / c["実オッズ"] / 100) * 100
+                                  for c in selected}
+                    while sum(alloc.values()) > budget:
+                        # 最低保証額を超えている中で最大の買い目から削減
+                        reducible = {k: v for k, v in alloc.items() if v > _min_alloc.get(k, 100)}
+                        if not reducible:
+                            break
+                        max_combo = max(reducible, key=lambda k: alloc[k])
+                        alloc[max_combo] -= 100
+
+                return alloc
+
+            def _render_3t_table(rows: list[dict], table_id: str = "", result_combo: str = "",
+                                 start_num: int = 1, alloc_map: dict | None = None) -> str:
+                """3連単テーブルのHTML文字列を生成する。alloc_map があれば配分列を表示。"""
+                _show_alloc = alloc_map and any(alloc_map.values())
                 _th_style = ('background:#0d2855;color:#7ab8e8;padding:4px 3px;'
                              'font-size:0.7rem;border-bottom:2px solid #1e5fa8;white-space:nowrap;text-align:center')
                 hdr = (
                     f'<tr>'
                     f'<th style="{_th_style};width:30px">#</th>'
-                    f'<th style="{_th_style};width:28%">組番</th>'
+                    f'<th style="{_th_style};width:{"22%" if _show_alloc else "28%"}">組番</th>'
                     f'<th style="{_th_style}">確率</th>'
                     f'<th style="{_th_style}">実ｵｯｽﾞ</th>'
                     f'<th style="{_th_style}">公正ｵｯｽﾞ</th>'
                     f'<th style="{_th_style}">期待値</th>'
-                    f'</tr>'
                 )
+                if _show_alloc:
+                    hdr += (f'<th style="{_th_style}">配分</th>'
+                            f'<th style="{_th_style}">払戻</th>')
+                hdr += '</tr>'
                 body = ""
                 _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
                 _FFG = {"1":"#000","2":"#fff","3":"#fff","4":"#fff","5":"#000","6":"#fff"}
+
+                # 購入ライン挿入位置の検出（配分がある最後の行の直後）
+                _last_buy_idx = -1
+                _any_buy = False
+                if alloc_map:
+                    for _ri, _rc in enumerate(rows):
+                        if alloc_map.get(_rc.get("買い目", ""), 0) > 0:
+                            _last_buy_idx = _ri
+                            _any_buy = True
+
                 for idx, c in enumerate(rows):
                     combo = c["買い目"]
                     prob = c["的中確率"]
@@ -1307,14 +1406,20 @@ if app_mode == "予想":
                     else:
                         ev_str = '<span style="color:#555">-</span>'
 
+                    # 配分
+                    _alloc_yen = alloc_map.get(combo, 0) if alloc_map else 0
+
                     # 行背景
                     _is_zero = prob < 0.005
                     if _is_hit:
                         row_bg = "#3a1a0a"
                         row_border = "border-left:3px solid #ff6b00;"
-                    elif ev is not None and ev >= 1.0:
+                    elif _alloc_yen > 0:
                         row_bg = "#12301a"
                         row_border = "border-left:3px solid #2ecc71;"
+                    elif ev is not None and ev >= 1.0:
+                        row_bg = "#1a3020"
+                        row_border = "border-left:3px solid #2ecc7166;"
                     elif _is_zero:
                         row_bg = "#12151e"
                         row_border = ""
@@ -1339,8 +1444,36 @@ if app_mode == "予想":
                         f'font-size:0.78rem">{"999" if fair > 999 else f"{fair:.1f}"}</td>'
                         f'<td style="{_td_base};text-align:right;'
                         f'font-size:0.78rem">{ev_str}</td>'
-                        f'</tr>'
                     )
+                    if _show_alloc:
+                        if _alloc_yen > 0:
+                            _payout = int(_alloc_yen * actual) if actual is not None else 0
+                            body += (
+                                f'<td style="{_td_base};text-align:right;'
+                                f'font-size:0.78rem;color:#ffe066;font-weight:bold">'
+                                f'{_alloc_yen:,}</td>'
+                                f'<td style="{_td_base};text-align:right;'
+                                f'font-size:0.78rem;color:#2ecc71;font-weight:bold">'
+                                f'{_payout:,}</td>'
+                            )
+                        else:
+                            body += (
+                                f'<td style="{_td_base};text-align:right;'
+                                f'font-size:0.78rem;color:#555">-</td>'
+                                f'<td style="{_td_base};text-align:right;'
+                                f'font-size:0.78rem;color:#555">-</td>'
+                            )
+                    body += '</tr>'
+
+                    # ── 購入ライン ─────────────────────
+                    if _any_buy and idx == _last_buy_idx:
+                        _ncols = 8 if _show_alloc else 6
+                        body += (
+                            f'<tr><td colspan="{_ncols}" style="padding:0;height:3px;'
+                            f'background:linear-gradient(90deg,#2ecc71,#2ecc7100)">'
+                            f'</td></tr>'
+                        )
+
                 return (
                     f'<div class="sanrentan-wrap" style="overflow-x:hidden;">'
                     f'<table style="border-collapse:collapse;width:100%;table-layout:fixed;'
@@ -1348,15 +1481,84 @@ if app_mode == "予想":
                     f'{hdr}{body}</table></div>'
                 )
 
+            # ── 購入ライン分析 + 資金配分 ─────────────────────────────
+            _has_ev = any(c.get("期待値") is not None for c in all_3t)
+            _alloc_map = {}
+            if _has_ev:
+                # 予算スライダー
+                _budget = st.slider(
+                    "1R あたりの予算",
+                    min_value=100, max_value=5000, value=2000, step=100,
+                    format="%d円", key="buy_budget_slider",
+                )
+                _alloc_map = _calc_bet_alloc(all_3t, _budget)
+
+                if _alloc_map:
+                    _total_invest = sum(_alloc_map.values())
+                    # 配分加重の期待回収
+                    _expected_return = 0
+                    _bought = []
+                    for c in all_3t:
+                        _a = _alloc_map.get(c["買い目"], 0)
+                        if _a > 0:
+                            _bought.append(c)
+                            if c.get("実オッズ") is not None:
+                                _expected_return += c["的中確率"] / 100.0 * c["実オッズ"] * _a
+                    _expected_roi = (_expected_return / _total_invest - 1) * 100 if _total_invest > 0 else 0
+                    _hit_prob_any = (1 - np.prod([1 - c["的中確率"] / 100 for c in _bought])) * 100
+                    _n_alloc = len(_alloc_map)
+
+                    # 最低払戻額を計算
+                    _min_payout = min(
+                        _alloc_map.get(c["買い目"], 0) * c.get("実オッズ", 0)
+                        for c in _bought if _alloc_map.get(c["買い目"], 0) > 0
+                    )
+
+                    # サマリーパネル
+                    _roi_color = "#2ecc71" if _expected_roi > 0 else "#e74c3c"
+                    _panel_html = (
+                        f'<div style="background:linear-gradient(135deg,#0d2855,#1a3a6a);'
+                        f'border:1px solid #2ecc71;border-radius:10px;padding:12px 16px;'
+                        f'margin-bottom:12px">'
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+                        f'<span style="font-size:1.1rem">💰</span>'
+                        f'<span style="color:#2ecc71;font-weight:bold;font-size:0.95rem">'
+                        f'推奨: 確率上位 {_n_alloc}点買い</span>'
+                        f'<span style="color:#888;font-size:0.75rem">'
+                        f'（最低1.3倍回収配分）</span>'
+                        f'</div>'
+                        f'<div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:0.8rem">'
+                        f'<div><span style="color:#888">投資額:</span> '
+                        f'<span style="color:#fff;font-weight:bold">{_total_invest:,}円</span></div>'
+                        f'<div><span style="color:#888">期待回収:</span> '
+                        f'<span style="color:#ffe066;font-weight:bold">{_expected_return:,.0f}円</span></div>'
+                        f'<div><span style="color:#888">期待ROI:</span> '
+                        f'<span style="color:{_roi_color};font-weight:bold">'
+                        f'{"+" if _expected_roi > 0 else ""}{_expected_roi:.1f}%</span></div>'
+                        f'<div><span style="color:#888">いずれか的中率:</span> '
+                        f'<span style="color:#7ab8e8;font-weight:bold">{_hit_prob_any:.1f}%</span></div>'
+                        f'<div><span style="color:#888">最低払戻:</span> '
+                        f'<span style="color:#2ecc71;font-weight:bold">{_min_payout:,.0f}円</span></div>'
+                        f'</div>'
+                    )
+                    _legend_alloc = (
+                        '<div style="margin-top:6px;font-size:0.7rem;color:#666">'
+                        'どの買い目が的中しても投資額の1.3倍以上の払戻を保証'
+                        '</div>'
+                    )
+                    _panel_html += _legend_alloc + '</div>'
+                    st.markdown(_panel_html, unsafe_allow_html=True)
+
             top10 = all_3t[:10]
             rest = all_3t[10:]
 
-            st.markdown(_render_3t_table(top10, result_combo=_result_combo_3t), unsafe_allow_html=True)
+            st.markdown(_render_3t_table(top10, result_combo=_result_combo_3t, alloc_map=_alloc_map), unsafe_allow_html=True)
 
             # 凡例
-            _legend_items = '🟢 緑行 = 期待値 ≧ 1.0（バリュー買い目）'
+            _legend_items = '🟢 緑行 = 購入対象'
             if _result_combo_3t:
                 _legend_items += '&nbsp;|&nbsp;🟠 橙行 = 的中'
+            _legend_items += '&nbsp;|&nbsp;緑ライン = 購入ライン'
             _legend_items += ('&nbsp;|&nbsp;確率: Heneryモデル推定&nbsp;|&nbsp;'
                               '公正ｵｯｽﾞ: 理論適正倍率')
             st.markdown(
@@ -1368,7 +1570,7 @@ if app_mode == "予想":
 
             if rest:
                 with st.expander(f"▼ 残り {len(rest)} 件を表示"):
-                    st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
+                    st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11, alloc_map=_alloc_map), unsafe_allow_html=True)
 
         _render_3t_section()
 
@@ -2225,7 +2427,7 @@ if app_mode == "予想":
                 with _hdr_col1:
                     _lr2_text = ""
                     if st.session_state.odds_last_refresh_time > 0:
-                        _lr2 = datetime.fromtimestamp(st.session_state.odds_last_refresh_time)
+                        _lr2 = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=timezone(timedelta(hours=9)))
                         _lr2_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr2.strftime("%H:%M:%S")}</span>'
                     st.markdown(f"### 📊 3連単オッズ一覧{_lr2_text}", unsafe_allow_html=True)
                 with _hdr_col2:

@@ -172,7 +172,7 @@ _OMURA_SCORE_WEIGHTS.update({
     "rank_a2":           1.425,
     "stabilizer_in_boost": 3.421,
     "stabilizer_equalize": 0.139,
-    "prob_cap":          85.0,
+    "prob_cap":          70.0,
 })
 
 # ── 会場マスタ ──────────────────────────────────────────────────
