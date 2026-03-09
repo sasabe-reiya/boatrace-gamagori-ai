@@ -22,6 +22,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 APP_VERSION = "v3.1-20260304"
 
+_JST_TZ = timezone(timedelta(hours=9))
+def _today_jst():
+    return datetime.now(_JST_TZ).date()
+
 sys.path.insert(0, os.path.dirname(__file__))
 import config as _cfg
 from config import VENUE_CONFIGS, get_venue_config
@@ -442,7 +446,7 @@ if app_mode == "予想":
     # query_paramsのrace番号と日付からキャッシュを復元する
     if st.session_state.result is None and st.session_state.nav_race is None:
         _restore_race = st.query_params.get("race", "1")
-        _restore_date = st.query_params.get("d") or date.today().strftime("%Y%m%d")
+        _restore_date = st.query_params.get("d") or _today_jst().strftime("%Y%m%d")
         _cached = _load_result_cache(_restore_race, _restore_date, _device_id)
         if _cached:
             st.session_state.result      = _cached["result"]
@@ -486,7 +490,7 @@ if app_mode == "予想":
         with _settings_ph.container():
             if st.session_state.running:
                 _run_rno = st.session_state.get("_exec_race_no") or st.session_state.get("radio_race_no", 1)
-                _run_date = st.session_state.get("_exec_race_date") or date.today()
+                _run_date = st.session_state.get("_exec_race_date") or _today_jst()
                 _run_date_str = _run_date.strftime("%Y年%m月%d日") if hasattr(_run_date, "strftime") else str(_run_date)
                 st.markdown(
                     f'<div style="background:#1a2744;border:1px solid #1e5fa8;border-radius:8px;'
@@ -545,19 +549,19 @@ if app_mode == "予想":
             st.session_state.radio_race_no = race_no
             if str(race_no) != st.query_params.get("race"):
                 st.query_params["race"] = str(race_no)
-            _date_options = [date.today() + timedelta(days=i) for i in range(-3, 4)]
-            _date_labels = {d: d.strftime("%m/%d") + ("(今日)" if d == date.today() else "") for d in _date_options}
+            _date_options = [_today_jst() + timedelta(days=i) for i in range(-3, 4)]
+            _date_labels = {d: d.strftime("%m/%d") + ("(今日)" if d == _today_jst() else "") for d in _date_options}
             if "pills_race_date" not in st.session_state:
                 _d_param = st.query_params.get("d")
                 if _d_param:
                     try:
                         st.session_state.pills_race_date = datetime.strptime(_d_param, "%Y%m%d").date()
                     except ValueError:
-                        st.session_state.pills_race_date = date.today()
+                        st.session_state.pills_race_date = _today_jst()
                 else:
-                    st.session_state.pills_race_date = date.today()
+                    st.session_state.pills_race_date = _today_jst()
                 if st.session_state.pills_race_date not in _date_options:
-                    st.session_state.pills_race_date = date.today()
+                    st.session_state.pills_race_date = _today_jst()
             with st.container(key="date_pills_wrap"):
                 race_date = st.pills("開催日", _date_options, disabled=_ui_disabled, key="pills_race_date",
                                      format_func=lambda d: _date_labels[d])
@@ -596,7 +600,7 @@ if app_mode == "予想":
                     _nav_date = datetime.strptime(_d_qp, "%Y%m%d").date()
                 except ValueError:
                     _nav_date = None
-        race_date = _nav_date or date.today()
+        race_date = _nav_date or _today_jst()
         st.session_state.nav_race = None
         st.session_state.radio_race_no = race_no
         st.session_state._exec_race_date = race_date
@@ -608,7 +612,7 @@ if app_mode == "予想":
     _run_from_state = False
     if st.session_state.running and not fetch_btn and not _nav_auto:
         race_no = st.session_state.get("_exec_race_no") or st.session_state.get("radio_race_no", 1)
-        race_date = st.session_state.get("_exec_race_date") or date.today()
+        race_date = st.session_state.get("_exec_race_date") or _today_jst()
         _run_from_state = True
 
     if fetch_btn or _nav_auto or _run_from_state:
@@ -838,14 +842,13 @@ if app_mode == "予想":
         _dl_time = st.session_state.deadline or "-"
 
         # カウントダウン用: 締切のJST日時を生成（レース日付を使用）
-        _JST = timezone(timedelta(hours=9))
         _dl_dt = None
         if _dl_time != "-" and len(_dstr) == 8:
             try:
                 _race_date = f"{_dstr[:4]}-{_dstr[4:6]}-{_dstr[6:]}"
                 _dl_dt = datetime.strptime(
                     f"{_race_date} {_dl_time}", "%Y-%m-%d %H:%M"
-                ).replace(tzinfo=_JST)
+                ).replace(tzinfo=_JST_TZ)
             except Exception:
                 pass
 
@@ -854,7 +857,7 @@ if app_mode == "予想":
         _remain_sec = 0
         if _dl_dt:
             try:
-                _now_jst = datetime.now(_JST)
+                _now_jst = datetime.now(_JST_TZ)
                 _remain = _dl_dt - _now_jst
                 _remain_sec = int(_remain.total_seconds())
                 _is_past_deadline = _remain_sec <= 0
@@ -972,7 +975,7 @@ if app_mode == "予想":
             st.session_state.running = True
             st.session_state.show_settings = False
             st.session_state._exec_race_no = _rno_disp
-            st.session_state._exec_race_date = st.session_state.get("_exec_race_date") or date.today()
+            st.session_state._exec_race_date = st.session_state.get("_exec_race_date") or _today_jst()
             st.session_state.result = None
         st.button("🔄 予想を再実行", type="secondary", use_container_width=True,
                   on_click=_on_rerun_click)
@@ -1016,7 +1019,7 @@ if app_mode == "予想":
             _note_style = 'color:#7ab8e8;font-size:0.7rem;margin-top:2px;'
             weather_html += f'<div style="{_note_style}">※天気・波高以外はリアルタイム情報</div>'
             if _dl_dt:
-                _now_jst = datetime.now(_JST)
+                _now_jst = datetime.now(_JST_TZ)
                 _diff_sec = abs((_dl_dt - _now_jst).total_seconds())
                 if _diff_sec > 3600:
                     weather_html += '<div style="color:#ff6e6e;font-size:0.75rem;margin-top:2px;font-weight:bold;">※締め切り前後1時間外のため気象条件は予想に含めていません</div>'
@@ -1206,9 +1209,9 @@ if app_mode == "予想":
             with _hdr_col1:
                 _lr_text = ""
                 if st.session_state.odds_last_refresh_time > 0:
-                    _lr = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=timezone(timedelta(hours=9)))
-                    _lr_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr.strftime("%H:%M:%S")}</span>'
-                st.markdown(f"### 🎯 3連単 予想{_lr_text}", unsafe_allow_html=True)
+                    _lr = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=_JST_TZ)
+                    _lr_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px;white-space:nowrap">最終更新: {_lr.strftime("%H:%M:%S")}</span>'
+                st.markdown(f'<h3 style="display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;font-size:1.1rem">🎯 3連単 予想{_lr_text}</h3>', unsafe_allow_html=True)
             with _hdr_col2:
                 if st.session_state.race_no and st.session_state.date_str:
                     if st.button("オッズ更新", key="odds_refresh_btn", use_container_width=True):
@@ -1338,8 +1341,8 @@ if app_mode == "予想":
                     f'<th style="{_th_style}">期待値</th>'
                 )
                 if _show_alloc:
-                    hdr += (f'<th style="{_th_style}">配分</th>'
-                            f'<th style="{_th_style}">払戻</th>')
+                    hdr += (f'<th style="{_th_style};color:#f0a030">配分</th>'
+                            f'<th style="{_th_style};color:#4cda7c">払戻</th>')
                 hdr += '</tr>'
                 body = ""
                 _FBG = {"1":"#fff","2":"#000","3":"#e74c3c","4":"#3498db","5":"#f1c40f","6":"#2ecc71"}
@@ -1541,12 +1544,7 @@ if app_mode == "予想":
                         f'<span style="color:#2ecc71;font-weight:bold">{_min_payout:,.0f}円</span></div>'
                         f'</div>'
                     )
-                    _legend_alloc = (
-                        '<div style="margin-top:6px;font-size:0.7rem;color:#666">'
-                        'どの買い目が的中しても投資額の1.3倍以上の払戻を保証'
-                        '</div>'
-                    )
-                    _panel_html += _legend_alloc + '</div>'
+                    _panel_html += '</div>'
                     st.markdown(_panel_html, unsafe_allow_html=True)
 
             top10 = all_3t[:10]
@@ -1570,7 +1568,7 @@ if app_mode == "予想":
 
             if rest:
                 with st.expander(f"▼ 残り {len(rest)} 件を表示"):
-                    st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11, alloc_map=_alloc_map), unsafe_allow_html=True)
+                    st.markdown(_render_3t_table(rest, result_combo=_result_combo_3t, start_num=11), unsafe_allow_html=True)
 
         _render_3t_section()
 
@@ -1648,8 +1646,8 @@ if app_mode == "予想":
                 )
 
             _section_label = (
-                'style="color:#7ab8e8;font-size:0.75rem;font-weight:bold;'
-                'padding:4px 0;margin-top:6px;border-bottom:1px solid #2a4a80"'
+                'style="color:#7ab8e8;font-size:0.6rem;font-weight:bold;'
+                'padding:2px 0;margin-top:4px;border-bottom:1px solid #2a4a80"'
             )
 
             st.markdown(
@@ -2427,9 +2425,9 @@ if app_mode == "予想":
                 with _hdr_col1:
                     _lr2_text = ""
                     if st.session_state.odds_last_refresh_time > 0:
-                        _lr2 = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=timezone(timedelta(hours=9)))
-                        _lr2_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px">最終更新: {_lr2.strftime("%H:%M:%S")}</span>'
-                    st.markdown(f"### 📊 3連単オッズ一覧{_lr2_text}", unsafe_allow_html=True)
+                        _lr2 = datetime.fromtimestamp(st.session_state.odds_last_refresh_time, tz=_JST_TZ)
+                        _lr2_text = f'<span style="color:#888;font-size:0.75rem;margin-left:12px;white-space:nowrap">最終更新: {_lr2.strftime("%H:%M:%S")}</span>'
+                    st.markdown(f'<h3 style="display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;font-size:1.1rem">📊 3連単オッズ一覧{_lr2_text}</h3>', unsafe_allow_html=True)
                 with _hdr_col2:
                     if st.session_state.race_no and st.session_state.date_str:
                         if st.button("オッズ更新", key="odds_refresh_btn2", use_container_width=True):
@@ -2838,13 +2836,13 @@ else:
                 try:
                     _default_date_s = datetime.strptime(_d_param_s, "%Y%m%d").date()
                 except ValueError:
-                    _default_date_s = date.today()
+                    _default_date_s = _today_jst()
             else:
-                _default_date_s = date.today()
+                _default_date_s = _today_jst()
 
-            _date_options_s = [date.today() + timedelta(days=i) for i in range(-3, 4)]
-            _date_labels_s = {d: d.strftime("%m/%d") + ("(今日)" if d == date.today() else "") for d in _date_options_s}
-            _default_pill_s = _default_date_s if _default_date_s in _date_options_s else date.today()
+            _date_options_s = [_today_jst() + timedelta(days=i) for i in range(-3, 4)]
+            _date_labels_s = {d: d.strftime("%m/%d") + ("(今日)" if d == _today_jst() else "") for d in _date_options_s}
+            _default_pill_s = _default_date_s if _default_date_s in _date_options_s else _today_jst()
             shutsusou_date = st.pills("開催日", _date_options_s, default=_default_pill_s, key="shutsusou_date_input", disabled=_ui_disabled,
                                       format_func=lambda d: _date_labels_s[d])
 
