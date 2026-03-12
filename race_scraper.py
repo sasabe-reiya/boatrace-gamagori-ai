@@ -13,7 +13,9 @@ import warnings
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+_JST = timezone(timedelta(hours=9))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -82,7 +84,7 @@ def _fetch_racelist_soup(race_no: int, date_str: str, session: requests.Session 
 # 1. 出走表取得
 # ─────────────────────────────────────────────
 def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulSoup | None = None, session: requests.Session | None = None) -> pd.DataFrame:
-    if date_str is None: date_str = datetime.now().strftime("%Y%m%d")
+    if date_str is None: date_str = datetime.now(_JST).strftime("%Y%m%d")
     soup = _soup if _soup is not None else _fetch_racelist_soup(race_no, date_str, session=session)
     if not soup: return pd.DataFrame()
 
@@ -328,7 +330,7 @@ def fetch_suminoe_weather() -> dict | None:
 # 2. 直前情報取得 (風向・展示タイム)
 # ─────────────────────────────────────────────
 def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.DataFrame, dict]:
-    if date_str is None: date_str = datetime.now().strftime("%Y%m%d")
+    if date_str is None: date_str = datetime.now(_JST).strftime("%Y%m%d")
     url = f"{BASE_URL}/owpc/pc/race/beforeinfo"
     params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
     soup = _get_soup(url, params)
@@ -529,7 +531,7 @@ def fetch_full_race_data(
     DataFrame に "コース別1着率", "直近平均着順", "直近勝率" 列が追加される。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     # ── Phase 1: 独立した HTTPリクエストを並列実行 ──────
     # racelist soup → 出走表 + グレード（同一ページから2つ抽出）
@@ -618,7 +620,7 @@ def fetch_base_race_data(
     racelist soup も返すので、呼び出し側で deadline 解析や extended 処理に再利用できる。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     _venue = _cfg.get_venue_config(_jycd())
     with _venue_executor(3) as executor:
@@ -714,7 +716,7 @@ def fetch_odds_3t(race_no: int, date_str: str | None = None, jycd: str | None = 
       高倍率(例:1893)は整数表示（小数点なし）になる点に注意。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds3t"
     params = {"jcd": jycd or _jycd(), "hd": date_str, "rno": race_no}
@@ -822,7 +824,7 @@ def fetch_odds_2tf(race_no: int, date_str: str | None = None, jycd: str | None =
     取得失敗時は空dict。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/odds2tf"
     params = {"jcd": jycd or _jycd(), "hd": date_str, "rno": race_no}
@@ -991,7 +993,7 @@ def fetch_deadline(race_no: int, date_str: str | None = None, _soup: BeautifulSo
       → race_no 番目のtd（0始まりで race_no）を取得
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     soup = _soup
     if not soup:
@@ -1032,7 +1034,7 @@ def fetch_deadline(race_no: int, date_str: str | None = None, _soup: BeautifulSo
 def fetch_lady_racers(date_str: str | None = None) -> set[str]:
     """raceindex ページから女子選手の登録番号セットを返す。"""
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
     soup = _get_soup(f"{BASE_URL}/owpc/pc/race/raceindex",
                      {"jcd": _jycd(), "hd": date_str})
     if not soup:
@@ -1064,7 +1066,7 @@ def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
     {"1着": 1, "2着": 3, "3着": 2, "三連単": "1-3-2"} or None
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/raceresult"
     params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
@@ -1145,7 +1147,7 @@ def fetch_race_grade(race_no: int, date_str: str | None = None, _soup: Beautiful
     {"grade": "一般"|"G3"|"G2"|"G1"|"SG", "is_final": bool, "title": str}
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     result = {"grade": "一般", "is_final": False, "title": ""}
 
@@ -1411,7 +1413,7 @@ def fetch_gamagori_time(race_no: int, date_str: str | None = None) -> pd.DataFra
     空DataFrameの場合はデータ取得失敗。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     path = f"time/time{date_str}{_jycd()}{race_no:02d}.htm"
     html = _fetch_gamagori_html(path)
@@ -1536,7 +1538,7 @@ def fetch_omura_weather(race_no: int = 1, date_str: str | None = None) -> dict |
     データは【天候】晴れ【気温】１０度 ... のようにテキストで埋め込まれている。
     失敗時は None を返す。"""
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{OMURA_EXHIBIT_URL}?day={date_str}&race={race_no:02d}"
     try:
@@ -1598,7 +1600,7 @@ def fetch_omura_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:
     空DataFrameの場合はデータ取得失敗。
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{OMURA_EXHIBIT_URL}?day={date_str}&race={race_no:02d}"
     try:
@@ -1755,7 +1757,7 @@ def fetch_gamagori_taka(race_no: int, date_str: str | None = None) -> dict:
     }
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     result: dict = {
         "available":    False,
@@ -2132,7 +2134,7 @@ def fetch_race_result(race_no: int, date_str: str | None = None) -> dict | None:
         or None if race not finished.
     """
     if date_str is None:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
 
     url = f"{BASE_URL}/owpc/pc/race/raceresult"
     params = {"jcd": _jycd(), "hd": date_str, "rno": race_no}
