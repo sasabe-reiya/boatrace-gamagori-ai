@@ -646,45 +646,70 @@ if app_mode == "予想":
             st.rerun()
         st.session_state.pop("_ui_flushed", None)
 
+        # ── 同一レースの再予想キャッシュ判定 ──────────────────────
+        # 選手詳細データ（コース別成績・直近成績・決まり手）は同一レースなら不変
+        # → session_state にキャッシュして2回目以降は Phase 2 をスキップ
+        _race_cache_key = f"_static_cache_{d_str}_{race_no}_{_selected_venue_code}"
+        _has_static_cache = (
+            _race_cache_key in st.session_state
+            and st.session_state[_race_cache_key].get("ext_data")
+            and st.session_state[_race_cache_key].get("racer_km") is not None
+        )
+
         _avg_total = _load_avg_total()
+        if _has_static_cache:
+            _avg_total = _avg_total * 0.5  # キャッシュ利用時は推定時間を短縮
         _t_start = time.time()
         progress_bar = st.progress(0, text=f"⏳ データ取得を開始します...｜{_fmt_remaining(_avg_total)}")
 
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
         # fetch_base_race_data は内部で3並列（soup+beforeinfo+gamagori_time）
-        # その他5リクエストを同時に走らせる
+        # オッズ・結果など変動データは常に再取得
+        # 女子選手・高橋アナ予想はキャッシュがあればスキップ
         with ThreadPoolExecutor(max_workers=10, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
             f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
             f_odds     = executor.submit(fetch_odds_3t, race_no, d_str, _selected_venue_code)
             f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str, _selected_venue_code)
-            f_taka     = executor.submit(fetch_gamagori_taka, race_no, d_str) if _venue.get("has_taka_yoso") else None
             f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
-            f_lady     = executor.submit(fetch_lady_racers, d_str)
+            # 日次固定データはキャッシュがあればスキップ
+            f_taka = None
+            if _venue.get("has_taka_yoso"):
+                if _has_static_cache and "taka" in st.session_state[_race_cache_key]:
+                    f_taka = None  # キャッシュ利用
+                else:
+                    f_taka = executor.submit(fetch_gamagori_taka, race_no, d_str)
+            f_lady = None
+            if _has_static_cache and "lady_racers" in st.session_state[_race_cache_key]:
+                f_lady = None  # キャッシュ利用
+            else:
+                f_lady = executor.submit(fetch_lady_racers, d_str)
 
             phase1_map = {
                 f_data:     "出走表・直前データ",
                 f_odds:     "3連単オッズ",
                 f_odds_2tf: "2連単オッズ",
                 f_rresult:  "レース結果",
-                f_lady:     "女子選手情報",
             }
+            if f_lady is not None:
+                phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
             done_count = 0
-            total_tasks = len(phase1_map) + 2  # Phase1 + Phase2: 2
+            _phase2_tasks = 0 if _has_static_cache else 2
+            total_tasks = len(phase1_map) + _phase2_tasks
             for future in as_completed(phase1_map):
                 done_count += 1
                 name = phase1_map[future]
-                pct = int((done_count / total_tasks) * 60)
+                pct = int((done_count / total_tasks) * 60) if total_tasks > 0 else 60
                 _remaining = max(0, _avg_total - (time.time() - _t_start))
                 progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
 
             df_raw, weather, racelist_soup = f_data.result()
             odds     = f_odds.result()
             odds_2tf = f_odds_2tf.result()
-            taka     = f_taka.result() if f_taka else {}
+            taka     = f_taka.result() if f_taka else (st.session_state[_race_cache_key].get("taka", {}) if _has_static_cache else {})
             race_result_data = f_rresult.result()
-            lady_racers = f_lady.result()
+            lady_racers = f_lady.result() if f_lady else (st.session_state[_race_cache_key].get("lady_racers", set()) if _has_static_cache else set())
 
         # ── Phase 2: 出走表に依存するリクエストを並列実行 ──────────
         # deadline は soup を再利用（HTTPリクエスト不要）
@@ -702,22 +727,39 @@ if app_mode == "予想":
                         _cm[_f] = int(_c)
                 if _cm and _cm != {str(i): i for i in range(1, 7)}:
                     _course_map = _cm  # 枠番順と異なる場合のみ渡す
-            _remaining = max(0, _avg_total - (time.time() - _t_start))
-            progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
-            with ThreadPoolExecutor(max_workers=2, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
-                f_ext      = executor.submit(fetch_extended_player_data, reg_nos)
-                f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str, df_raw, course_map=_course_map)
 
-                phase2_map = {f_ext: "選手コース別成績", f_racer_km: "選手別決まり手"}
-                for future in as_completed(phase2_map):
-                    done_count += 1
-                    name = phase2_map[future]
-                    pct = int((done_count / total_tasks) * 60)
-                    _remaining = max(0, _avg_total - (time.time() - _t_start))
-                    progress_bar.progress(pct, text=f"⏳ 選手詳細データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+            if _has_static_cache:
+                # ── キャッシュ利用: Phase 2 スキップ ──────────────
+                ext_data = st.session_state[_race_cache_key]["ext_data"]
+                racer_km = st.session_state[_race_cache_key]["racer_km"]
+                _remaining = max(0, _avg_total - (time.time() - _t_start))
+                progress_bar.progress(60, text=f"⚡ キャッシュ利用中（選手詳細データ）｜{_fmt_remaining(_remaining)}")
+            else:
+                # ── 初回: 選手詳細データを取得 ──────────────────
+                _remaining = max(0, _avg_total - (time.time() - _t_start))
+                progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 選手詳細データ取得中... ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+                with ThreadPoolExecutor(max_workers=2, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
+                    f_ext      = executor.submit(fetch_extended_player_data, reg_nos)
+                    f_racer_km = executor.submit(fetch_racer_kimarite, race_no, d_str, df_raw, course_map=_course_map)
 
-                ext_data = f_ext.result()
-                racer_km = f_racer_km.result()
+                    phase2_map = {f_ext: "選手コース別成績", f_racer_km: "選手別決まり手"}
+                    for future in as_completed(phase2_map):
+                        done_count += 1
+                        name = phase2_map[future]
+                        pct = int((done_count / total_tasks) * 60)
+                        _remaining = max(0, _avg_total - (time.time() - _t_start))
+                        progress_bar.progress(pct, text=f"⏳ 選手詳細データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+
+                    ext_data = f_ext.result()
+                    racer_km = f_racer_km.result()
+
+                # ── 静的データをキャッシュに保存 ──────────────────
+                st.session_state[_race_cache_key] = {
+                    "ext_data": ext_data,
+                    "racer_km": racer_km,
+                    "taka": taka,
+                    "lady_racers": lady_racers,
+                }
 
             df_raw = apply_extended_data(df_raw, ext_data)
         else:
@@ -979,6 +1021,22 @@ if app_mode == "予想":
             st.session_state.result = None
         st.button("🔄 予想を再実行", type="secondary", use_container_width=True,
                   on_click=_on_rerun_click)
+
+        # ── 直前情報未取得の通知 ──────────────────────────────────────
+        _has_chokuzen = (
+            "展示タイム" in scored.columns
+            and scored["展示タイム"].apply(lambda x: pd.notnull(x) and x > 0).any()
+        )
+        if not _has_chokuzen:
+            st.markdown(
+                '<div style="background:linear-gradient(135deg,#3a2000,#4a2800);'
+                'border:1px solid #ff9800;border-radius:8px;padding:10px 14px;'
+                'margin-bottom:10px;text-align:center">'
+                '<span style="color:#ffb74d;font-size:0.95rem;font-weight:bold">'
+                '⚠ 直前情報がまだ取得できていません</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
         # グレードバッジ + 気象メトリクス
         if st.session_state.weather:
@@ -1251,7 +1309,7 @@ if app_mode == "予想":
             if _rr and _rr.get("払戻", {}).get("3連単"):
                 _result_combo_3t = _rr["払戻"]["3連単"]["組番"].replace("－", "-").replace("ー", "-")
 
-            def _calc_bet_alloc(candidates: list[dict], budget: int) -> dict:
+            def _calc_bet_alloc(candidates: list[dict], budget: int, min_return_ratio: float = 1.3) -> dict:
                 """確率上位から連続で買い、トリガミなしで配分する。
 
                 ルール:
@@ -1272,7 +1330,7 @@ if app_mode == "予想":
                 # 最低払戻 ≧ 投資額×1.5 を保証する配分が予算内に収まる最大N点
                 # → オッズが低い（本命決着型）→ 少点数
                 # → オッズが高い（混戦型）→ 多点数
-                _min_return_ratio = 1.3
+                _min_return_ratio = min_return_ratio
                 final_n = 0
                 for n in range(1, min(len(buyable), 10) + 1):
                     subset = buyable[:n]
@@ -1489,12 +1547,24 @@ if app_mode == "予想":
             _alloc_map = {}
             if _has_ev:
                 # 予算スライダー
-                _budget = st.slider(
+                if "buy_budget_slider" not in st.session_state:
+                    st.session_state["buy_budget_slider"] = 1000
+                st.slider(
                     "1R あたりの予算",
-                    min_value=100, max_value=5000, value=1000, step=100,
+                    min_value=100, max_value=5000, step=100,
                     format="%d円", key="buy_budget_slider",
                 )
-                _alloc_map = _calc_bet_alloc(all_3t, _budget)
+                _budget = st.session_state["buy_budget_slider"]
+                # 最低回収倍率スライダー
+                if "min_return_ratio_slider" not in st.session_state:
+                    st.session_state["min_return_ratio_slider"] = 1.3
+                st.slider(
+                    "最低回収倍率",
+                    min_value=1.0, max_value=3.0, step=0.1,
+                    format="%.1f倍", key="min_return_ratio_slider",
+                )
+                _min_return_ratio = st.session_state["min_return_ratio_slider"]
+                _alloc_map = _calc_bet_alloc(all_3t, _budget, _min_return_ratio)
 
                 if _alloc_map:
                     _total_invest = sum(_alloc_map.values())
@@ -1528,7 +1598,7 @@ if app_mode == "予想":
                         f'<span style="color:#2ecc71;font-weight:bold;font-size:0.95rem">'
                         f'推奨: 確率上位 {_n_alloc}点買い</span>'
                         f'<span style="color:#888;font-size:0.75rem">'
-                        f'（最低1.3倍回収配分）</span>'
+                        f'（最低{_min_return_ratio:.1f}倍回収配分）</span>'
                         f'</div>'
                         f'<div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:0.8rem">'
                         f'<div><span style="color:#888">投資額:</span> '
