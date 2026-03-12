@@ -1491,7 +1491,7 @@ if app_mode == "予想":
                 # 予算スライダー
                 _budget = st.slider(
                     "1R あたりの予算",
-                    min_value=100, max_value=5000, value=2000, step=100,
+                    min_value=100, max_value=5000, value=1000, step=100,
                     format="%d円", key="buy_budget_slider",
                 )
                 _alloc_map = _calc_bet_alloc(all_3t, _budget)
