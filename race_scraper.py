@@ -137,16 +137,14 @@ def fetch_race_card(race_no: int, date_str: str | None = None, _soup: BeautifulS
             st_text = line_tds[0].get_text(separator="|")
             parts_fl = [v.strip() for v in st_text.split("|") if v.strip()]
             st = next((_to_float(v) for v in parts_fl if "." in v), None)
-            # F/L回数: 整数値を順番に取得（構造: F回数, L回数, 平均ST）
-            int_vals_fl = []
+            # F/L回数: "F1", "L0" のような形式からパース
             for v in parts_fl:
-                if re.fullmatch(r'\d+', v.strip()):
-                    int_vals_fl.append(int(v.strip()))
-            if len(int_vals_fl) >= 2:
-                f_count = int_vals_fl[0]
-                l_count = int_vals_fl[1]
-            elif len(int_vals_fl) == 1:
-                f_count = int_vals_fl[0]
+                m_f = re.fullmatch(r'[FＦ]\s*(\d+)', v.strip())
+                m_l = re.fullmatch(r'[LＬ]\s*(\d+)', v.strip())
+                if m_f:
+                    f_count = int(m_f.group(1))
+                elif m_l:
+                    l_count = int(m_l.group(1))
         if len(line_tds) > 1:
             vals = [_to_float(v) for v in line_tds[1].get_text(separator="|").split("|") if _to_float(v) is not None]
             if len(vals) >= 1: nw = vals[0]  # 全国勝率

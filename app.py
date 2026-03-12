@@ -674,8 +674,9 @@ if app_mode == "予想":
             # 日次固定データはキャッシュがあればスキップ
             f_taka = None
             if _venue.get("has_taka_yoso"):
-                if _has_static_cache and "taka" in st.session_state[_race_cache_key]:
-                    f_taka = None  # キャッシュ利用
+                _cached_taka = st.session_state[_race_cache_key].get("taka", {}) if _has_static_cache else {}
+                if _cached_taka.get("available"):
+                    f_taka = None  # available=True のキャッシュを利用
                 else:
                     f_taka = executor.submit(fetch_gamagori_taka, race_no, d_str)
             f_lady = None
@@ -707,7 +708,7 @@ if app_mode == "予想":
             df_raw, weather, racelist_soup = f_data.result()
             odds     = f_odds.result()
             odds_2tf = f_odds_2tf.result()
-            taka     = f_taka.result() if f_taka else (st.session_state[_race_cache_key].get("taka", {}) if _has_static_cache else {})
+            taka     = f_taka.result() if f_taka else _cached_taka
             race_result_data = f_rresult.result()
             lady_racers = f_lady.result() if f_lady else (st.session_state[_race_cache_key].get("lady_racers", set()) if _has_static_cache else set())
 

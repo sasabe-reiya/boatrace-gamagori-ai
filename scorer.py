@@ -411,17 +411,21 @@ def calculate_scores(
                     scores[i] += (boat2[i] / mean_b2 - 1.0) * W.get("boat2_rate", 1.5)
 
     # ── Step 3d: F/L回数ペナルティ 【v3新規】 ────────────────────
+    # A1選手はF持ちでもスタートを攻める傾向があるためペナルティを軽減
+    _FL_RANK_FACTOR = {"A1": 0.3, "A2": 0.6, "B1": 1.0, "B2": 1.0}
+    ranks = df["級別"].values if "級別" in df.columns else [None] * n
     f_counts = _safe_col(df, "F回数")
     l_counts = _safe_col(df, "L回数")
     if f_counts is not None:
         for i in range(n):
             if f_counts[i] >= 1:
-                # F持ち: スタート慎重化 → 本来のST能力を発揮できない
-                scores[i] -= W.get("fl_f_penalty", 5.0) * f_counts[i]
+                factor = _FL_RANK_FACTOR.get(str(ranks[i]).strip(), 1.0)
+                scores[i] -= W.get("fl_f_penalty", 5.0) * f_counts[i] * factor
     if l_counts is not None:
         for i in range(n):
             if l_counts[i] >= 1:
-                scores[i] -= W.get("fl_l_penalty", 3.0) * l_counts[i]
+                factor = _FL_RANK_FACTOR.get(str(ranks[i]).strip(), 1.0)
+                scores[i] -= W.get("fl_l_penalty", 3.0) * l_counts[i] * factor
 
     # ── Step 3e: 体重×気象相互作用 【v3新規】 ─────────────────────
     weights = _safe_col(df, "体重")
