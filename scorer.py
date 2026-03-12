@@ -14,8 +14,10 @@ from __future__ import annotations
 9. 2連単・2連複推奨買い目の生成
 """
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import permutations
+
+_JST = timezone(timedelta(hours=9))
 
 import numpy as np
 import pandas as pd
@@ -28,7 +30,7 @@ def _is_weather_reliable(deadline: str | None) -> bool:
     if not deadline or deadline == "-":
         return False
     try:
-        now = datetime.now()
+        now = datetime.now(_JST)
         hh, mm = map(int, deadline.split(":"))
         dl_time = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return abs((now - dl_time).total_seconds()) <= 3600
