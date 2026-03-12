@@ -386,12 +386,9 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
         classes = unit.get("class", [])
 
         if "is-direction" in classes:
-            # 方位コンパスユニット → 気温データ + 風向を取得
-            # ★ 風向: is-direction{N} の番号を COMPASS_DIR_MAP で変換
-            n = _get_p_class_number(unit, "direction")
-            if n is not None:
-                weather["風向"] = COMPASS_DIR_MAP.get(n, "-")
-            # 気温: LabelData spanから取得
+            # 方位コンパスユニット → 気温データのみ取得
+            # ※ is-direction{N} はCSSコンパス回転用で風向番号とは異なる
+            #   風向は is-windDirection セクションの is-wind{N} から取得する
             weather["気温"] = _get_label_data(unit)
 
         elif "is-weather" in classes:
@@ -410,13 +407,17 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
                     elif "雪" in t: weather["天気"] = "雪"
 
         elif "is-windDirection" in classes:
-            # is-wind17 = 無風（1〜16の範囲外の特別値）→ 風向を"-"に上書き
-            # それ以外は方位コンパス(is-direction)を正とするので無視
+            # is-wind{N} (N=1〜16) → COMPASS_DIR_MAP で風向に変換
+            # is-wind17 = 無風
             p = unit.find("p", class_=re.compile(r"is-wind\d+"))
             if p:
                 m = re.search(r"is-wind(\d+)", " ".join(p.get("class", [])))
-                if m and int(m.group(1)) == 17:
-                    weather["風向"] = "-"
+                if m:
+                    wn = int(m.group(1))
+                    if wn == 17:
+                        weather["風向"] = "-"
+                    else:
+                        weather["風向"] = COMPASS_DIR_MAP.get(wn, "-")
 
         elif "is-wind" in classes:
             # 風速ユニット（is-windDirection より後に判定すること）
