@@ -673,6 +673,7 @@ if app_mode == "予想":
             f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
             # 日次固定データはキャッシュがあればスキップ
             f_taka = None
+            _cached_taka = {}
             if _venue.get("has_taka_yoso"):
                 _cached_taka = st.session_state[_race_cache_key].get("taka", {}) if _has_static_cache else {}
                 if _cached_taka.get("available"):
