@@ -397,6 +397,8 @@ if "venue" not in st.query_params:
     st.markdown("##### レース場を選択してください")
     st.markdown("")
 
+    # 調整中の会場コード
+    _TUNING_VENUES = {"13"}
     st.markdown('<style>[data-testid="stButton"] button[kind="primary"] { padding: 2.5rem 1rem; font-size: 1.1rem; color: #0a1628 !important; font-weight: bold; }</style>', unsafe_allow_html=True)
     _venue_list = list(VENUE_CONFIGS.items())
     # 2列ずつ表示（狭い画面でも全会場が見えるように）
@@ -405,7 +407,12 @@ if "venue" not in st.query_params:
         _vs_cols = st.columns(2)
         for i, (code, vcfg) in enumerate(row_items):
             with _vs_cols[i]:
-                if st.button(f'{vcfg["short_name"]}\n{vcfg["en_name"]}', key=f"venue_sel_{code}", use_container_width=True, type="primary"):
+                _is_tuning = code in _TUNING_VENUES
+                _label = f'{vcfg["short_name"]}\n{vcfg["en_name"]}'
+                if _is_tuning:
+                    _label += "\n(調整中)"
+                _btn_type = "secondary" if _is_tuning else "primary"
+                if st.button(_label, key=f"venue_sel_{code}", use_container_width=True, type=_btn_type):
                     st.query_params["venue"] = code
                     st.rerun()
     st.stop()
@@ -1910,7 +1917,7 @@ if app_mode == "予想":
                 _budget = st.session_state["buy_budget_slider"]
                 # 最低回収倍率スライダー
                 if "min_return_ratio_slider" not in st.session_state:
-                    st.session_state["min_return_ratio_slider"] = 1.3
+                    st.session_state["min_return_ratio_slider"] = 2.0
                 st.slider(
                     "最低回収倍率",
                     min_value=1.0, max_value=3.0, step=0.1,

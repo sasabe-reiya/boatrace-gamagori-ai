@@ -175,6 +175,35 @@ _OMURA_SCORE_WEIGHTS.update({
     "prob_cap":          70.0,
 })
 
+# ══════════════════════════════════════════════════════════════════
+#  尼崎（デイ）
+# ══════════════════════════════════════════════════════════════════
+_AMAGASAKI_SETTINGS = {
+    "night_race_start":       99,   # デイレースなのでナイター補正なし
+    "calm_wind_threshold":    2.5,
+    "base_kado_rate":         17.5,
+    "base_makuri_sashi_rate": 13.0,
+    "night_nige_boost":       1.0,  # ナイター補正なし
+}
+
+# 尼崎 進入コース別成績（2025.12〜2026.02 集計 ※公式サイトに基づく）
+_AMAGASAKI_COURSE_STATS = {
+    1: {"1着": 61.8, "2着": 14.1, "3着":  9.0, "4着":  6.8, "5着":  4.6, "6着":  3.5},
+    2: {"1着": 10.1, "2着": 27.8, "3着": 17.6, "4着": 15.9, "5着": 17.9, "6着": 10.4},
+    3: {"1着": 10.0, "2着": 23.0, "3着": 21.0, "4着": 20.3, "5着": 12.1, "6着": 13.4},
+    4: {"1着": 11.2, "2着": 14.8, "3着": 21.0, "4着": 20.7, "5着": 18.3, "6着": 13.6},
+    5: {"1着":  5.8, "2着": 16.9, "3着": 19.9, "4着": 17.0, "5着": 22.1, "6着": 18.1},
+    6: {"1着":  2.1, "2着":  4.8, "3着": 12.8, "4着": 20.4, "5着": 24.8, "6着": 34.8},
+}
+
+_AMAGASAKI_SCORE_WEIGHTS = dict(_SCORE_WEIGHTS_BASE)
+_AMAGASAKI_SCORE_WEIGHTS.update({
+    "course_base":       [61.8, 10.1, 10.0, 11.2, 5.8, 2.1],  # 尼崎1着率
+    "taka_boost":        0.0,   # 高橋アナ予想は蒲郡のみ
+    "night_boost":       0.0,
+    "calm_in_boost":     0.0,
+})
+
 # ── 会場マスタ ──────────────────────────────────────────────────
 VENUE_CONFIGS = {
     "07": {
@@ -217,6 +246,20 @@ VENUE_CONFIGS = {
         "has_iot_weather": False,
         "has_official_weather": True,     # 大村公式サイト気象データ
         "official_site": "https://omurakyotei.jp",
+    },
+    "13": {
+        "code": "13",
+        "name": "尼崎",
+        "short_name": "尼崎",
+        "en_name": "AMAGASAKI BOATRACE",
+        "settings": _AMAGASAKI_SETTINGS,
+        "course_stats": _AMAGASAKI_COURSE_STATS,
+        "score_weights": _AMAGASAKI_SCORE_WEIGHTS,
+        "has_original_exhibit": False,    # 独自展示タイムなし（boatrace.jpのデータを使用）
+        "has_taka_yoso": False,
+        "has_iot_weather": False,
+        "has_official_weather": False,    # TODO: 公式サイト気象ページURL判明後に有効化
+        "official_site": "https://www.boatrace-amagasaki.jp",
     },
 }
 
