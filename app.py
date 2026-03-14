@@ -1009,7 +1009,7 @@ if app_mode == "予想":
                 phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
-            _smooth.set_phase(50)  # Phase 1 上限 50%
+            _smooth.set_phase(70)  # Phase 1 上限 70%（HTTP取得が最も時間がかかる）
             _smooth.wait_futures(list(phase1_map.keys()))
 
             # ── 結果取得: 出走表（不変） ──
@@ -1056,7 +1056,7 @@ if app_mode == "予想":
                 if _cm and _cm != {str(i): i for i in range(1, 7)}:
                     _course_map = _cm  # 枠番順と異なる場合のみ渡す
 
-            _smooth.set_phase(65)  # Phase 2 上限 65%
+            _smooth.set_phase(85)  # Phase 2 上限 85%
             if _has_static_cache:
                 # ── レースキャッシュ利用: Phase 2 完全スキップ ─────
                 ext_data = st.session_state[_race_cache_key]["ext_data"]
@@ -1139,7 +1139,7 @@ if app_mode == "予想":
         odds_2t = odds_2tf.get("2連単", {})
 
         if not df_raw.empty:
-            _smooth.set_phase(90, "🧠 AI予想を計算中...")
+            _smooth.set_phase(95, "🧠 AI予想を計算中...")
             try:
                 result = predict(
                     df_raw, weather, race_no,
@@ -1161,7 +1161,7 @@ if app_mode == "予想":
                 st.session_state._fetch_error = f"予想計算中にエラーが発生しました: {e}\nレース設定を変更して再度お試しください。"
                 st.rerun()
 
-            _smooth.set_phase(95, "💾 予想結果を保存中...")
+            _smooth.set_phase(98, "💾 予想結果を保存中...")
             st.session_state.result      = result
             st.session_state.weather     = weather
             st.session_state.deadline    = deadline
