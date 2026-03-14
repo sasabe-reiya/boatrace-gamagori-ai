@@ -172,27 +172,42 @@ def _restore_venue_cache_types(data):
     return data
 
 # ── バックグラウンド選手データ先読み ──────────────────────────────
-# アプリ起動中に1時間ごとに会場全選手のデータをキャッシュに蓄積する。
-# 予想実行時にはキャッシュ済みの選手データを即利用でき、高速化される。
-_BG_PREFETCH_INTERVAL = 3600  # 秒（1時間）
+# アプリ起動時に全会場の選手データをバックグラウンドで取得しキャッシュに蓄積。
+# 全選手取得完了後はその日は再実行しない。取得失敗があれば5分後にリトライ。
+_BG_RETRY_INTERVAL = 300  # リトライ間隔（5分）
 _bg_prefetch_lock = threading.Lock()
 _bg_prefetch_started = False
 
 def _bg_prefetch_worker():
     """バックグラウンドで会場全選手データをキャッシュに蓄積するワーカー。"""
+    _completed_date = None  # 全会場完了した日付
+
     while True:
         try:
             d_str = datetime.now(_JST_TZ).strftime("%Y%m%d")
-            # 全会場設定をループ
+
+            # 既に当日分が全会場完了済みなら日付が変わるまで待機
+            if _completed_date == d_str:
+                _now = datetime.now(_JST_TZ)
+                _tomorrow = (_now + timedelta(days=1)).replace(hour=0, minute=0, second=10)
+                _wait = (_tomorrow - _now).total_seconds()
+                print(f"[prefetch] 当日分完了済。日付変更まで待機（{int(_wait)}秒）")
+                time.sleep(max(_wait, 60))
+                continue
+
+            all_done = True  # 全会場完了フラグ
+            has_failure = False  # 取得失敗フラグ
+
             for venue_code in VENUE_CONFIGS:
                 try:
                     set_thread_venue(venue_code)
-                    # 会場の全選手登録番号を取得
                     all_reg = fetch_all_venue_reg_nos(d_str)
                     if not all_reg:
+                        # 出走表が未公開（開催なし or 早朝）→ 失敗扱い
+                        all_done = False
                         continue
 
-                    # 既存キャッシュを読み込み、未取得の選手を特定
+                    # 既存キャッシュを読み込み
                     existing = _load_venue_cache(d_str, venue_code)
                     if existing:
                         existing = _restore_venue_cache_types(existing)
@@ -205,21 +220,26 @@ def _bg_prefetch_worker():
 
                     need_fetch = [r for r in all_reg if r and r not in cached_cs]
                     if not need_fetch:
-                        print(f"[prefetch] {venue_code}: 全{len(all_reg)}選手キャッシュ済")
+                        print(f"[prefetch] {venue_code}: 全{len(all_reg)}選手キャッシュ済 ✓")
                         continue
 
-                    print(f"[prefetch] {venue_code}: {len(need_fetch)}人の選手データを取得開始")
-
-                    # 低並列度で取得（サーバー負荷軽減）
+                    print(f"[prefetch] {venue_code}: {len(need_fetch)}/{len(all_reg)}人を取得中...")
                     new_ext = fetch_extended_player_data(need_fetch)
                     new_km  = fetch_all_kimarite_raw(need_fetch)
 
+                    # 取得結果を検証（一部でも取得できたか）
+                    got_cs = new_ext.get("course_stats", {})
+                    got_rr = new_ext.get("recent_results", {})
+                    if not got_cs and not got_rr and not new_km:
+                        print(f"[prefetch] {venue_code}: 取得データなし → リトライ対象")
+                        has_failure = True
+                        continue
+
                     # マージ
-                    cached_cs.update(new_ext.get("course_stats", {}))
-                    cached_rr.update(new_ext.get("recent_results", {}))
+                    cached_cs.update(got_cs)
+                    cached_rr.update(got_rr)
                     cached_km.update(new_km)
 
-                    # 女子選手も取得（未取得の場合）
                     if not cached_lady:
                         try:
                             cached_lady = fetch_lady_racers(d_str)
@@ -229,17 +249,30 @@ def _bg_prefetch_worker():
                     _save_venue_cache(d_str, venue_code,
                                       {"course_stats": cached_cs, "recent_results": cached_rr},
                                       cached_km, cached_lady)
-                    print(f"[prefetch] {venue_code}: {len(need_fetch)}人追加完了（合計{len(cached_cs)}人）")
+
+                    # 全員取得できたか確認
+                    still_missing = [r for r in all_reg if r and r not in cached_cs]
+                    if still_missing:
+                        print(f"[prefetch] {venue_code}: {len(cached_cs)}/{len(all_reg)}人完了（残{len(still_missing)}人 → リトライ対象）")
+                        has_failure = True
+                    else:
+                        print(f"[prefetch] {venue_code}: 全{len(all_reg)}選手取得完了 ✓")
 
                 except Exception as e:
                     print(f"[prefetch] {venue_code} エラー: {e}")
+                    has_failure = True
                     continue
+
+            if all_done and not has_failure:
+                _completed_date = d_str
+                print(f"[prefetch] ★ 全会場の選手データ取得完了（{d_str}）")
+            else:
+                print(f"[prefetch] 未完了あり → {_BG_RETRY_INTERVAL}秒後にリトライ")
+                time.sleep(_BG_RETRY_INTERVAL)
 
         except Exception as e:
             print(f"[prefetch] ワーカーエラー: {e}")
-
-        # 次回まで待機
-        time.sleep(_BG_PREFETCH_INTERVAL)
+            time.sleep(_BG_RETRY_INTERVAL)
 
 def _start_bg_prefetch():
     """バックグラウンド先読みスレッドを起動する（シングルトン）。"""
