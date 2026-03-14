@@ -1028,6 +1028,29 @@ def fetch_deadline(race_no: int, date_str: str | None = None, _soup: BeautifulSo
 
 
 # ─────────────────────────────────────────────
+# 5a. 会場全選手の登録番号を一括取得（raceindex）
+# ─────────────────────────────────────────────
+def fetch_all_venue_reg_nos(date_str: str | None = None) -> list[str]:
+    """raceindex ページから当日の会場全レースに出場する選手の登録番号リストを返す。"""
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+    soup = _get_soup(f"{BASE_URL}/owpc/pc/race/raceindex",
+                     {"jcd": _jycd(), "hd": date_str})
+    if not soup:
+        return []
+    reg_nos: list[str] = []
+    seen: set[str] = set()
+    for a_tag in soup.find_all("a", href=re.compile(r"toban=(\d+)")):
+        m = re.search(r"toban=(\d+)", a_tag["href"])
+        if m:
+            rno = m.group(1)
+            if rno not in seen:
+                seen.add(rno)
+                reg_nos.append(rno)
+    return reg_nos
+
+
+# ─────────────────────────────────────────────
 # 5b. 女子選手判定（raceindex の is-lady クラス）
 # ─────────────────────────────────────────────
 def fetch_lady_racers(date_str: str | None = None) -> set[str]:
@@ -2026,6 +2049,169 @@ def _parse_henko_html(html: str, course: int) -> dict | None:
             "抜き": 0.0,
             "恵まれ": 0.0,
         }
+
+
+def _parse_henko_html_all(html: str) -> dict | None:
+    """
+    request_racer_henko.php の HTML レスポンスを解析し、
+    全6コース分の決まり手データを返す（直近6ヶ月データ使用）。
+
+    Returns
+    -------
+    {1: {"逃げ": ..., "差し": 0, ...}, 2: {...}, ..., 6: {...}}
+    解析失敗時は None
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    rows = soup.find_all("tr")
+    if len(rows) < 7:
+        return None
+
+    def _extract_pcts(tr_tag) -> list[float]:
+        pcts = []
+        for c in tr_tag.find_all("td"):
+            text = c.get_text(strip=True).replace("%", "")
+            try:
+                pcts.append(float(text))
+            except ValueError:
+                pass
+        return pcts
+
+    def _is_label_row(tr_tag) -> bool:
+        for td in tr_tag.find_all("td"):
+            cls = td.get("class") or []
+            if "shusso_title" in cls or "shusso_title_make" in cls:
+                return True
+        return False
+
+    group_data_6m = []
+    for i, row in enumerate(rows):
+        if _is_label_row(row) and i + 2 < len(rows):
+            data_6m = _extract_pcts(rows[i + 2])
+            if data_6m:
+                group_data_6m.append(data_6m)
+
+    if len(group_data_6m) < 4:
+        return None
+
+    g1_6m = group_data_6m[0]
+    g2_6m = group_data_6m[1]
+    g3_6m = group_data_6m[2]
+    g4_6m = group_data_6m[3]
+
+    result = {}
+    # コース1
+    result[1] = {
+        "逃げ": g1_6m[0] if len(g1_6m) > 0 else 0.0,
+        "差し": 0.0, "まくり": 0.0, "まくり差し": 0.0,
+        "抜き": 0.0, "恵まれ": 0.0,
+        "差され": g2_6m[0] if len(g2_6m) > 0 else 0.0,
+        "捲られ": g3_6m[0] if len(g3_6m) > 0 else 0.0,
+        "捲られ差": g4_6m[0] if len(g4_6m) > 0 else 0.0,
+    }
+    # コース2-6
+    for course in range(2, 7):
+        idx = course - 1
+        result[course] = {
+            "逃げ": 0.0,
+            "差し": g2_6m[idx] if len(g2_6m) > idx else 0.0,
+            "まくり": g3_6m[idx] if len(g3_6m) > idx else 0.0,
+            "まくり差し": g4_6m[idx] if len(g4_6m) > idx else 0.0,
+            "抜き": 0.0, "恵まれ": 0.0,
+        }
+    return result
+
+
+def fetch_all_kimarite_raw(reg_nos: list[str]) -> dict:
+    """
+    複数選手の全コース分決まり手データを並列取得する。
+
+    Returns
+    -------
+    {reg_no: {1: {決まり手dict}, 2: {...}, ..., 6: {...}}, ...}
+    """
+    import json as _json
+
+    results = {}
+    valid = [r for r in reg_nos if r]
+    if not valid:
+        return results
+
+    def _fetch_one(player_no):
+        try:
+            reqdata = _json.dumps({
+                "mode": 0,
+                "player_no": str(player_no),
+                "grade": 1,
+            })
+            resp = requests.post(
+                f"{_KYOTEI_BASE}/racer/request_racer_henko.php",
+                data={"data": reqdata},
+                headers={
+                    **_KYOTEI_HEADERS,
+                    "Referer": f"{_KYOTEI_BASE}/racer/racer_no/{player_no}",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return player_no, None
+            return player_no, _parse_henko_html_all(resp.text)
+        except Exception as e:
+            print(f"[scraper] 決まり手一括取得エラー ({player_no}): {e}")
+            return player_no, None
+
+    try:
+        with _venue_executor(8) as executor:
+            futures = [executor.submit(_fetch_one, rno) for rno in valid]
+            for future in as_completed(futures):
+                try:
+                    rno, data = future.result(timeout=20)
+                    if data is not None:
+                        results[rno] = data
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[scraper] 決まり手一括取得失敗: {e}")
+
+    print(f"[scraper] 決まり手一括取得: {len(results)}/{len(valid)}名分取得成功")
+    return results
+
+
+def build_race_kimarite(
+    km_cache: dict,
+    df_race_card: pd.DataFrame,
+    course_map: dict | None = None,
+) -> dict:
+    """
+    会場レベルの決まり手キャッシュからレース単位の決まり手辞書を構築する。
+
+    Parameters
+    ----------
+    km_cache : {reg_no: {course(int): {決まり手dict}}} — fetch_all_kimarite_raw の戻り値
+    df_race_card : 出走表DataFrame
+    course_map : 展示進入マッピング {枠番文字列: 進入コース番号(1-6)}
+
+    Returns
+    -------
+    {"1": {決まり手dict}, "2": {...}, ..., "6": {...}}
+    """
+    result = {}
+    if df_race_card.empty or "登録番号" not in df_race_card.columns:
+        return result
+
+    for _, row in df_race_card.iterrows():
+        frame_no = str(row.get("枠番", ""))
+        player_no = row.get("登録番号")
+        if not frame_no or not player_no:
+            continue
+        course_no = int(course_map[frame_no]) if course_map and frame_no in course_map else int(frame_no)
+        player_data = km_cache.get(str(player_no))
+        if player_data and course_no in player_data:
+            result[frame_no] = player_data[course_no]
+
+    if result:
+        cm_info = " (展示進入反映)" if course_map else ""
+        print(f"[scraper] 決まり手(キャッシュ): {len(result)}名分構築成功{cm_info}")
+    return result
 
 
 def fetch_racer_kimarite(
