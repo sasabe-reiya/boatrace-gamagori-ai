@@ -610,6 +610,85 @@ def fetch_full_race_data(
     return final_df, weather
 
 
+def fetch_racelist_static(
+    race_no: int,
+    date_str: str | None = None,
+) -> tuple[pd.DataFrame, dict, BeautifulSoup | None]:
+    """
+    出走表ページから不変データのみ取得する（HTTPリクエスト1回）。
+    返り値: (card_df, grade_info_dict, racelist_soup)
+    card_df: 枠番・選手名・登録番号・級別・勝率・モーター等
+    grade_info_dict: {"grade": ..., "is_final": ..., "title": ...}
+    """
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+
+    racelist_soup = _fetch_racelist_soup(race_no, date_str)
+    card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
+    grade_info = fetch_race_grade(race_no, date_str, _soup=racelist_soup)
+    return card_df, grade_info, racelist_soup
+
+
+def fetch_before_and_exhibit(
+    race_no: int,
+    date_str: str | None = None,
+) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    """
+    直前情報＋会場独自展示タイムを並列取得する（HTTPリクエスト2回）。
+    返り値: (before_df, weather, exhibit_df)
+    """
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+
+    _venue = _cfg.get_venue_config(_jycd())
+    with _venue_executor(2) as executor:
+        f_before = executor.submit(fetch_before_info, race_no, date_str)
+        f_exhibit = _submit_original_exhibit(executor, _venue, race_no, date_str)
+
+        ex_df, weather = f_before.result()
+        gama_time_df = f_exhibit.result() if f_exhibit else pd.DataFrame()
+
+    return ex_df, weather, gama_time_df
+
+
+def merge_race_data(
+    card_df: pd.DataFrame,
+    grade_info: dict,
+    ex_df: pd.DataFrame,
+    weather: dict,
+    gama_time_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    出走表 + 直前情報 + 展示タイムを統合して最終 DataFrame と weather を返す。
+    （HTTPリクエストなし、データ結合のみ）
+    """
+    if card_df.empty:
+        return pd.DataFrame(), weather
+
+    if not ex_df.empty:
+        final_df = pd.merge(card_df, ex_df, on="枠番", how="left")
+    else:
+        final_df = card_df.copy()
+        final_df["展示タイム"] = None
+        final_df["チルト"] = 0.0
+        final_df["体重"] = None
+        final_df["周回タイム"] = None
+
+    if not gama_time_df.empty:
+        final_df = pd.merge(final_df, gama_time_df, on="枠番", how="left")
+    else:
+        final_df["展示タイム_gama"] = None
+        final_df["一周タイム"] = None
+        final_df["まわり足タイム"] = None
+        final_df["直線タイム"] = None
+
+    weather["grade"] = grade_info["grade"]
+    weather["is_final"] = grade_info["is_final"]
+    weather["grade_title"] = grade_info["title"]
+
+    return final_df, weather
+
+
 def fetch_base_race_data(
     race_no: int,
     date_str: str | None = None,
@@ -617,6 +696,7 @@ def fetch_base_race_data(
     """
     出走表＋直前情報を統合して返す（拡張データなし・Phase 1のみ）。
     racelist soup も返すので、呼び出し側で deadline 解析や extended 処理に再利用できる。
+    ※後方互換用ラッパー。新規コードでは fetch_racelist_static / fetch_before_and_exhibit を使用。
     """
     if date_str is None:
         date_str = datetime.now(_JST).strftime("%Y%m%d")
@@ -632,30 +712,8 @@ def fetch_base_race_data(
         gama_time_df = f_exhibit.result() if f_exhibit else pd.DataFrame()
 
     card_df = fetch_race_card(race_no, date_str, _soup=racelist_soup)
-    if card_df.empty:
-        return pd.DataFrame(), {}, racelist_soup
-
-    if not ex_df.empty:
-        final_df = pd.merge(card_df, ex_df, on="枠番", how="left")
-    else:
-        final_df = card_df
-        final_df["展示タイム"] = None
-        final_df["チルト"] = 0.0
-        final_df["体重"] = None
-        final_df["周回タイム"] = None
-
-    if not gama_time_df.empty:
-        final_df = pd.merge(final_df, gama_time_df, on="枠番", how="left")
-    else:
-        final_df["展示タイム_gama"] = None
-        final_df["一周タイム"] = None
-        final_df["まわり足タイム"] = None
-        final_df["直線タイム"] = None
-
     grade_info = fetch_race_grade(race_no, date_str, _soup=racelist_soup)
-    weather["grade"] = grade_info["grade"]
-    weather["is_final"] = grade_info["is_final"]
-    weather["grade_title"] = grade_info["title"]
+    final_df, weather = merge_race_data(card_df, grade_info, ex_df, weather, gama_time_df)
 
     return final_df, weather, racelist_soup
 

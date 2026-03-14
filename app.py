@@ -31,7 +31,8 @@ import config as _cfg
 from config import VENUE_CONFIGS, get_venue_config
 from race_scraper import (
     fetch_full_race_data, fetch_race_card,
-    fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
+    fetch_base_race_data, fetch_racelist_static, fetch_before_and_exhibit,
+    merge_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
     fetch_all_venue_reg_nos, fetch_all_kimarite_raw, build_race_kimarite,
@@ -882,14 +883,35 @@ if app_mode == "予想":
         progress_bar = st.progress(0, text=f"⏳ データ取得を開始します...｜{_fmt_remaining(_avg_total)}")
 
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
-        # fetch_base_race_data は内部で3並列（soup+beforeinfo+gamagori_time）
-        # オッズ・結果など変動データは常に再取得
+        # 出走表（racelist）: 不変 → 永続キャッシュ
+        # 直前情報・展示（before_info+exhibit）: 不変 → 永続キャッシュ
+        # オッズは常に再取得
+        # レース結果は一度取得できたら（非None）永続キャッシュ
         # 女子選手・高橋アナ予想はキャッシュがあればスキップ
+
+        # ── キャッシュ判定 ──
+        _racelist_cached = False   # 出走表（不変）
+        _before_cached = False     # 直前情報・展示（不変）
+        _race_result_cached = False
+        if _has_static_cache:
+            _sc = st.session_state[_race_cache_key]
+            # 出走表: 一度取得したら永続キャッシュ
+            if _sc.get("racelist_static") is not None:
+                _racelist_cached = True
+            # 直前情報・展示: スタート展示が完了していれば永続キャッシュ
+            # （展示タイムだけ先に公開され、進入コース・ST展示は後から追加される）
+            if _sc.get("before_data") is not None and _sc.get("_before_complete"):
+                _before_cached = True
+            # レース結果: 非Noneなら確定済み→再取得不要
+            if _sc.get("race_result") is not None:
+                _race_result_cached = True
+
         with ThreadPoolExecutor(max_workers=10, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
-            f_data     = executor.submit(fetch_base_race_data, race_no, d_str)
+            f_racelist = executor.submit(fetch_racelist_static, race_no, d_str) if not _racelist_cached else None
+            f_before   = executor.submit(fetch_before_and_exhibit, race_no, d_str) if not _before_cached else None
             f_odds     = executor.submit(fetch_odds_3t, race_no, d_str, _selected_venue_code)
             f_odds_2tf = executor.submit(fetch_odds_2tf, race_no, d_str, _selected_venue_code)
-            f_rresult  = executor.submit(fetch_race_result, race_no, d_str)
+            f_rresult  = executor.submit(fetch_race_result, race_no, d_str) if not _race_result_cached else None
             # 日次固定データはキャッシュがあればスキップ
             f_taka = None
             _cached_taka = {}
@@ -907,11 +929,15 @@ if app_mode == "予想":
                 f_lady = executor.submit(fetch_lady_racers, d_str)
 
             phase1_map = {
-                f_data:     "出走表・直前データ",
                 f_odds:     "3連単オッズ",
                 f_odds_2tf: "2連単オッズ",
-                f_rresult:  "レース結果",
             }
+            if f_racelist is not None:
+                phase1_map[f_racelist] = "出走表"
+            if f_before is not None:
+                phase1_map[f_before] = "直前情報"
+            if f_rresult is not None:
+                phase1_map[f_rresult] = "レース結果"
             if f_lady is not None:
                 phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
@@ -926,11 +952,25 @@ if app_mode == "予想":
                 _remaining = max(0, _avg_total - (time.time() - _t_start))
                 progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
 
-            df_raw, weather, racelist_soup = f_data.result()
+            # ── 結果取得: 出走表（不変） ──
+            if f_racelist is not None:
+                card_df, grade_info, racelist_soup = f_racelist.result()
+            else:
+                card_df, grade_info, racelist_soup = st.session_state[_race_cache_key]["racelist_static"]
+            # ── 結果取得: 直前情報（変動） ──
+            if f_before is not None:
+                ex_df, weather, gama_time_df = f_before.result()
+            else:
+                ex_df, weather, gama_time_df = st.session_state[_race_cache_key]["before_data"]
+            # ── 統合 ──
+            df_raw, weather = merge_race_data(card_df, grade_info, ex_df, weather, gama_time_df)
             odds     = f_odds.result()
             odds_2tf = f_odds_2tf.result()
             taka     = f_taka.result() if f_taka else _cached_taka
-            race_result_data = f_rresult.result()
+            if f_rresult is not None:
+                race_result_data = f_rresult.result()
+            else:
+                race_result_data = st.session_state[_race_cache_key]["race_result"]
             # lady_racers: レースキャッシュ → 会場ファイルキャッシュ → 新規取得 の優先順
             if f_lady:
                 lady_racers = f_lady.result()
@@ -1013,13 +1053,37 @@ if app_mode == "予想":
                 racer_km = build_race_kimarite(_cached_km, df_raw, course_map=_course_map)
 
             # ── レース単位キャッシュにも保存（同一レース再予想用）──
+            # 展示データ完全性判定: 展示タイム/まわり足/直線T/一周Tのうち
+            # 2列以上にデータがあれば展示完了とみなす（展示タイムだけ先行公開されるため）
+            _exhibit_cols = ["展示タイム_gama", "まわり足タイム", "直線タイム", "一周タイム"]
+            _filled = sum(
+                1 for c in _exhibit_cols
+                if c in df_raw.columns and df_raw[c].notna().any()
+            )
+            _before_complete = _filled >= 2
             if not _has_static_cache:
                 st.session_state[_race_cache_key] = {
                     "ext_data": ext_data,
                     "racer_km": racer_km,
                     "taka": taka,
                     "lady_racers": lady_racers,
+                    "racelist_static": (card_df, grade_info, racelist_soup),
+                    "before_data": (ex_df, weather, gama_time_df),
+                    "_before_complete": _before_complete,
+                    "deadline": deadline,
+                    "race_result": race_result_data,
                 }
+            else:
+                # 既存キャッシュを部分更新（未取得分のみ）
+                _sc = st.session_state[_race_cache_key]
+                if not _racelist_cached:
+                    _sc["racelist_static"] = (card_df, grade_info, racelist_soup)
+                if not _before_cached:
+                    _sc["before_data"] = (ex_df, weather, gama_time_df)
+                    _sc["_before_complete"] = _before_complete
+                    _sc["deadline"] = deadline
+                if race_result_data is not None:
+                    _sc["race_result"] = race_result_data
 
             df_raw = apply_extended_data(df_raw, ext_data)
         else:
@@ -1277,7 +1341,21 @@ if app_mode == "予想":
             st.session_state.running = True
             st.session_state.show_settings = False
             st.session_state._exec_race_no = _rno_disp
-            st.session_state._exec_race_date = st.session_state.get("_exec_race_date") or _today_jst()
+            # 日付復元: _exec_race_date → date_str → query_params → today
+            _rerun_date = st.session_state.get("_exec_race_date")
+            if _rerun_date is None and st.session_state.get("date_str"):
+                try:
+                    _rerun_date = datetime.strptime(st.session_state.date_str, "%Y%m%d").date()
+                except (ValueError, TypeError):
+                    _rerun_date = None
+            if _rerun_date is None:
+                _d_qp = st.query_params.get("d")
+                if _d_qp:
+                    try:
+                        _rerun_date = datetime.strptime(_d_qp, "%Y%m%d").date()
+                    except (ValueError, TypeError):
+                        _rerun_date = None
+            st.session_state._exec_race_date = _rerun_date or _today_jst()
             st.session_state.result = None
         st.button("🔄 予想を再実行", type="secondary", use_container_width=True,
                   on_click=_on_rerun_click)
