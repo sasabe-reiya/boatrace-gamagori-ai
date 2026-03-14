@@ -34,9 +34,10 @@ from race_scraper import (
     fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
-    fetch_all_kimarite_raw, build_race_kimarite,
+    fetch_all_venue_reg_nos, fetch_all_kimarite_raw, build_race_kimarite,
     set_thread_venue,
 )
+import threading
 from scorer import predict, get_wind_type
 from result_tracker import save_prediction
 
@@ -98,23 +99,24 @@ def _cleanup_old_caches(keep_days: int = 2):
 _cleanup_old_caches()
 
 # ── 会場レベル選手キャッシュ（ファイルベース）─────────────────────
+_venue_cache_file_lock = threading.Lock()
+
 def _venue_cache_path(d_str, venue_code):
     return os.path.join(_CACHE_DIR, f"venue_players_{d_str}_{venue_code}.json")
 
 def _load_venue_cache(d_str, venue_code):
-    """会場レベルの選手データキャッシュをファイルから読み込む。"""
+    """会場レベルの選手データキャッシュをファイルから読み込む（スレッドセーフ）。"""
     path = _venue_cache_path(d_str, venue_code)
     if not os.path.exists(path):
         return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # 必須キーの存在チェック
-        if data.get("ext_data") and data.get("km_cache") is not None:
-            return data
-        print(f"[cache] 会場キャッシュ読み込み: キー不足 ext_data={bool(data.get('ext_data'))} km_cache={data.get('km_cache') is not None}")
-    except Exception as e:
-        print(f"[cache] 会場キャッシュ読み込み失敗: {e}")
+    with _venue_cache_file_lock:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("ext_data") and data.get("km_cache") is not None:
+                return data
+        except Exception as e:
+            print(f"[cache] 会場キャッシュ読み込み失敗: {e}")
     return None
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -133,29 +135,24 @@ class _NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 def _save_venue_cache(d_str, venue_code, ext_data, km_cache, lady_racers):
-    """会場レベルの選手データキャッシュをファイルに保存する。"""
+    """会場レベルの選手データキャッシュをファイルに保存する（スレッドセーフ）。"""
     path = _venue_cache_path(d_str, venue_code)
-    try:
-        cache = {
-            "ext_data": ext_data,
-            "km_cache": {str(k): v for k, v in km_cache.items()},  # reg_no は文字列キー
-            "lady_racers": list(lady_racers) if isinstance(lady_racers, set) else lady_racers,
-        }
-        # km_cache 内部の int キー (コース番号) を文字列に変換
-        for rno, courses in cache["km_cache"].items():
-            if isinstance(courses, dict):
-                cache["km_cache"][rno] = {str(c): v for c, v in courses.items()}
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, cls=_NumpyEncoder)
-    except Exception as e:
-        import traceback as _tb
-        _tb.print_exc()
-        # Streamlit UI にもエラーを表示（デバッグ用）
+    with _venue_cache_file_lock:
         try:
-            import streamlit as _st2
-            _st2.toast(f"⚠️ キャッシュ保存エラー: {e}", icon="⚠️")
-        except Exception:
-            pass
+            cache = {
+                "ext_data": ext_data,
+                "km_cache": {str(k): v for k, v in km_cache.items()},  # reg_no は文字列キー
+                "lady_racers": list(lady_racers) if isinstance(lady_racers, set) else lady_racers,
+            }
+            # km_cache 内部の int キー (コース番号) を文字列に変換
+            for rno, courses in cache["km_cache"].items():
+                if isinstance(courses, dict):
+                    cache["km_cache"][rno] = {str(c): v for c, v in courses.items()}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, ensure_ascii=False, cls=_NumpyEncoder)
+        except Exception as e:
+            import traceback as _tb
+            _tb.print_exc()
 
 def _restore_venue_cache_types(data):
     """ファイルから読み込んだ会場キャッシュの型を復元する（JSON → Python）。"""
@@ -173,6 +170,90 @@ def _restore_venue_cache_types(data):
     if isinstance(lr, list):
         data["lady_racers"] = set(lr)
     return data
+
+# ── バックグラウンド選手データ先読み ──────────────────────────────
+# アプリ起動中に1時間ごとに会場全選手のデータをキャッシュに蓄積する。
+# 予想実行時にはキャッシュ済みの選手データを即利用でき、高速化される。
+_BG_PREFETCH_INTERVAL = 3600  # 秒（1時間）
+_bg_prefetch_lock = threading.Lock()
+_bg_prefetch_started = False
+
+def _bg_prefetch_worker():
+    """バックグラウンドで会場全選手データをキャッシュに蓄積するワーカー。"""
+    while True:
+        try:
+            d_str = datetime.now(_JST_TZ).strftime("%Y%m%d")
+            # 全会場設定をループ
+            for venue_code in VENUE_CONFIGS:
+                try:
+                    set_thread_venue(venue_code)
+                    # 会場の全選手登録番号を取得
+                    all_reg = fetch_all_venue_reg_nos(d_str)
+                    if not all_reg:
+                        continue
+
+                    # 既存キャッシュを読み込み、未取得の選手を特定
+                    existing = _load_venue_cache(d_str, venue_code)
+                    if existing:
+                        existing = _restore_venue_cache_types(existing)
+                        cached_cs = existing["ext_data"].get("course_stats", {})
+                        cached_rr = existing["ext_data"].get("recent_results", {})
+                        cached_km = existing.get("km_cache", {})
+                        cached_lady = existing.get("lady_racers", set())
+                    else:
+                        cached_cs, cached_rr, cached_km, cached_lady = {}, {}, {}, set()
+
+                    need_fetch = [r for r in all_reg if r and r not in cached_cs]
+                    if not need_fetch:
+                        print(f"[prefetch] {venue_code}: 全{len(all_reg)}選手キャッシュ済")
+                        continue
+
+                    print(f"[prefetch] {venue_code}: {len(need_fetch)}人の選手データを取得開始")
+
+                    # 低並列度で取得（サーバー負荷軽減）
+                    new_ext = fetch_extended_player_data(need_fetch)
+                    new_km  = fetch_all_kimarite_raw(need_fetch)
+
+                    # マージ
+                    cached_cs.update(new_ext.get("course_stats", {}))
+                    cached_rr.update(new_ext.get("recent_results", {}))
+                    cached_km.update(new_km)
+
+                    # 女子選手も取得（未取得の場合）
+                    if not cached_lady:
+                        try:
+                            cached_lady = fetch_lady_racers(d_str)
+                        except Exception:
+                            cached_lady = set()
+
+                    _save_venue_cache(d_str, venue_code,
+                                      {"course_stats": cached_cs, "recent_results": cached_rr},
+                                      cached_km, cached_lady)
+                    print(f"[prefetch] {venue_code}: {len(need_fetch)}人追加完了（合計{len(cached_cs)}人）")
+
+                except Exception as e:
+                    print(f"[prefetch] {venue_code} エラー: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"[prefetch] ワーカーエラー: {e}")
+
+        # 次回まで待機
+        time.sleep(_BG_PREFETCH_INTERVAL)
+
+def _start_bg_prefetch():
+    """バックグラウンド先読みスレッドを起動する（シングルトン）。"""
+    global _bg_prefetch_started
+    with _bg_prefetch_lock:
+        if _bg_prefetch_started:
+            return
+        _bg_prefetch_started = True
+    t = threading.Thread(target=_bg_prefetch_worker, daemon=True, name="venue-prefetch")
+    t.start()
+    print("[prefetch] バックグラウンド先読みスレッド起動")
+
+# アプリ起動時にバックグラウンド先読みを開始
+_start_bg_prefetch()
 
 def _cache_path(race_no, d_str, device_id=""):
     if device_id:
