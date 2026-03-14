@@ -77,6 +77,65 @@ def _fmt_remaining(sec):
         return f"残り約{sec}秒"
     return f"残り約{sec // 60}分{sec % 60}秒"
 
+class _SmoothProgress:
+    """経過時間ベースでプログレスバーをスムーズに更新するヘルパー。
+
+    フェーズごとに到達上限(ceiling)を設定し、経過時間に基づいて
+    なめらかに進行する。バックグラウンドスレッドが 0.3 秒間隔で更新。
+    """
+    def __init__(self, bar, avg_total, t_start):
+        self._bar = bar
+        self._avg_total = max(avg_total, 1)
+        self._t_start = t_start
+        self._ceiling = 10          # 現在フェーズの上限%
+        self._text = "⏳ 予想準備中..."
+        self._current = 0           # 現在の表示%
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _calc_pct(self):
+        elapsed = time.time() - self._t_start
+        ratio = min(elapsed / self._avg_total, 1.0)
+        # 全体時間の割合で 0-95% に対応させ、ceiling で制限
+        raw = int(ratio * 95)
+        return min(raw, self._ceiling)
+
+    def _run(self):
+        while not self._stop.is_set():
+            self._update()
+            self._stop.wait(0.3)
+
+    def _update(self):
+        with self._lock:
+            pct = self._calc_pct()
+            # 逆戻りしない
+            if pct < self._current:
+                pct = self._current
+            self._current = pct
+            remaining = max(0, self._avg_total - (time.time() - self._t_start))
+            text = f"{self._text}｜{_fmt_remaining(remaining)}"
+        try:
+            self._bar.progress(pct, text=text)
+        except Exception:
+            pass
+
+    def set_phase(self, ceiling, text=None):
+        """フェーズ遷移: 上限%とテキストを更新"""
+        with self._lock:
+            self._ceiling = ceiling
+            if text:
+                self._text = text
+        self._update()
+
+    def finish(self, text="✅ 予想完了！"):
+        self._stop.set()
+        try:
+            self._bar.progress(100, text=text)
+        except Exception:
+            pass
+
 # ── キャッシュ自動クリーンアップ ─────────────────────────────────
 def _cleanup_old_caches(keep_days: int = 2):
     """_cache 内の古いファイルを自動削除する（当日と前日以外）。
@@ -887,7 +946,8 @@ if app_mode == "予想":
         if _has_static_cache or _has_venue_cache:
             _avg_total = _avg_total * 0.5  # キャッシュ利用時は推定時間を短縮
         _t_start = time.time()
-        progress_bar = st.progress(0, text=f"⏳ データ取得を開始します...｜{_fmt_remaining(_avg_total)}")
+        progress_bar = st.progress(0, text=f"⏳ 予想準備中...｜{_fmt_remaining(_avg_total)}")
+        _smooth = _SmoothProgress(progress_bar, _avg_total, _t_start)
 
         # ── Phase 1: 独立した全HTTPリクエストを一括並列実行 ──────────
         # 出走表（racelist）: 不変 → 永続キャッシュ
@@ -949,15 +1009,11 @@ if app_mode == "予想":
                 phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
+            _smooth.set_phase(50)  # Phase 1 上限 50%
             done_count = 0
-            _phase2_tasks = 0 if _has_static_cache else 2
-            total_tasks = len(phase1_map) + _phase2_tasks
             for future in as_completed(phase1_map):
                 done_count += 1
-                name = phase1_map[future]
-                pct = int((done_count / total_tasks) * 60) if total_tasks > 0 else 60
-                _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(pct, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
+                future.result()  # 例外があればここで発生
 
             # ── 結果取得: 出走表（不変） ──
             if f_racelist is not None:
@@ -1003,12 +1059,11 @@ if app_mode == "予想":
                 if _cm and _cm != {str(i): i for i in range(1, 7)}:
                     _course_map = _cm  # 枠番順と異なる場合のみ渡す
 
+            _smooth.set_phase(65)  # Phase 2 上限 65%
             if _has_static_cache:
                 # ── レースキャッシュ利用: Phase 2 完全スキップ ─────
                 ext_data = st.session_state[_race_cache_key]["ext_data"]
                 racer_km = st.session_state[_race_cache_key]["racer_km"]
-                _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(60, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
             else:
                 # ── 会場ファイルキャッシュから既知選手を取得、未知選手のみHTTP取得 ─
                 _cached_cs = _venue_file_cache["ext_data"]["course_stats"] if _has_venue_cache else {}
@@ -1020,21 +1075,9 @@ if app_mode == "予想":
 
                 if _need_fetch:
                     # 未知選手のみ取得（最大6人）
-                    _remaining = max(0, _avg_total - (time.time() - _t_start))
-                    _n_cached = len(reg_nos) - len(_need_fetch)
-                    progress_bar.progress(int((done_count / total_tasks) * 60),
-                        text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
                     with ThreadPoolExecutor(max_workers=3, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
                         f_ext    = executor.submit(fetch_extended_player_data, _need_fetch)
                         f_km_all = executor.submit(fetch_all_kimarite_raw, _need_fetch)
-
-                        phase2_map = {f_ext: "選手コース別成績", f_km_all: "選手決まり手"}
-                        for future in as_completed(phase2_map):
-                            done_count += 1
-                            name = phase2_map[future]
-                            pct = int((done_count / total_tasks) * 60)
-                            _remaining = max(0, _avg_total - (time.time() - _t_start))
-                            progress_bar.progress(pct, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
 
                         new_ext = f_ext.result()
                         new_km  = f_km_all.result()
@@ -1049,8 +1092,7 @@ if app_mode == "予想":
                                       {"course_stats": _cached_cs, "recent_results": _cached_rr},
                                       _cached_km, lady_racers)
                 else:
-                    _remaining = max(0, _avg_total - (time.time() - _t_start))
-                    progress_bar.progress(60, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
+                    pass  # 全選手キャッシュ済 — スムーズプログレスが自動更新
 
                 # 当該レース分を抽出
                 ext_data = {
@@ -1099,8 +1141,7 @@ if app_mode == "予想":
         odds_2t = odds_2tf.get("2連単", {})
 
         if not df_raw.empty:
-            _remaining = max(0, _avg_total - (time.time() - _t_start))
-            progress_bar.progress(70, text=f"🧠 AI予想を計算中...｜{_fmt_remaining(_remaining)}")
+            _smooth.set_phase(90, "🧠 AI予想を計算中...")
             try:
                 result = predict(
                     df_raw, weather, race_no,
@@ -1111,7 +1152,7 @@ if app_mode == "予想":
                     venue_code=_selected_venue_code,
                 )
             except Exception as e:
-                progress_bar.progress(100, text="❌ 予想計算エラー")
+                _smooth.finish("❌ 予想計算エラー")
                 time.sleep(1)
                 progress_bar.empty()
                 st.session_state.running = False
@@ -1122,8 +1163,7 @@ if app_mode == "予想":
                 st.session_state._fetch_error = f"予想計算中にエラーが発生しました: {e}\nレース設定を変更して再度お試しください。"
                 st.rerun()
 
-            _remaining = max(0, _avg_total - (time.time() - _t_start))
-            progress_bar.progress(90, text=f"💾 予想結果を保存中...｜{_fmt_remaining(_remaining)}")
+            _smooth.set_phase(95, "💾 予想結果を保存中...")
             st.session_state.result      = result
             st.session_state.weather     = weather
             st.session_state.deadline    = deadline
@@ -1146,7 +1186,7 @@ if app_mode == "予想":
                 pass  # 保存失敗しても予想表示は続行
 
             _save_exec_total(time.time() - _t_start)
-            progress_bar.progress(100, text="✅ 予想完了！")
+            _smooth.finish("✅ 予想完了！")
             progress_bar.empty()
 
             # オッズ自動更新のタイマーをリセット（リラン直後の再取得を防止）
