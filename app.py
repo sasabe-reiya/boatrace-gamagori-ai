@@ -34,7 +34,7 @@ from race_scraper import (
     fetch_base_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
-    fetch_all_venue_reg_nos, fetch_all_kimarite_raw, build_race_kimarite,
+    fetch_all_kimarite_raw, build_race_kimarite,
     set_thread_venue,
 )
 from scorer import predict, get_wind_type
@@ -754,17 +754,10 @@ if app_mode == "予想":
             and st.session_state[_race_cache_key].get("ext_data")
             and st.session_state[_race_cache_key].get("racer_km") is not None
         )
-        # (B) 会場レベルキャッシュ（ファイルベース）: 全選手のコース別成績・直近成績・決まり手を保持
-        #     初回予想時に全選手分を一括取得し、2レース目以降は瞬時に利用
+        # (B) 会場レベルキャッシュ（ファイルベース）: レース毎に選手データを追記蓄積
+        #     既知選手はキャッシュから即利用、未知選手のみHTTP取得して追記保存
         _venue_file_cache = _load_venue_cache(d_str, _selected_venue_code)
         _has_venue_cache = _venue_file_cache is not None
-        # デバッグ: キャッシュ状態を表示
-        if _has_static_cache:
-            st.toast("⚡ レースキャッシュ利用（Phase2スキップ）", icon="⚡")
-        elif _has_venue_cache:
-            st.toast("📂 会場ファイルキャッシュ利用（HTTP不要）", icon="📂")
-        else:
-            st.toast("🌐 初回取得：会場全選手データを一括取得します", icon="🌐")
         if _has_venue_cache:
             _venue_file_cache = _restore_venue_cache_types(_venue_file_cache)
 
@@ -799,13 +792,6 @@ if app_mode == "予想":
             else:
                 f_lady = executor.submit(fetch_lady_racers, d_str)
 
-            # 会場レベルの選手データ一括取得（初回のみ）
-            f_venue_reg_nos = None
-            f_venue_ext = None
-            f_venue_km = None
-            if not _has_static_cache and not _has_venue_cache:
-                f_venue_reg_nos = executor.submit(fetch_all_venue_reg_nos, d_str)
-
             phase1_map = {
                 f_data:     "出走表・直前データ",
                 f_odds:     "3連単オッズ",
@@ -816,10 +802,8 @@ if app_mode == "予想":
                 phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
-            if f_venue_reg_nos is not None:
-                phase1_map[f_venue_reg_nos] = "会場全選手リスト"
             done_count = 0
-            _phase2_tasks = 0 if (_has_static_cache or _has_venue_cache) else 2
+            _phase2_tasks = 0 if _has_static_cache else 2
             total_tasks = len(phase1_map) + _phase2_tasks
             for future in as_completed(phase1_map):
                 done_count += 1
@@ -842,10 +826,7 @@ if app_mode == "予想":
                 lady_racers = _venue_file_cache["lady_racers"]
             else:
                 lady_racers = set()
-            # 会場全選手の登録番号を取得（初回のみ）
-            all_venue_reg_nos = f_venue_reg_nos.result() if f_venue_reg_nos else []
-
-        # ── Phase 2: 選手詳細データの取得（会場レベルで一括） ─────────
+        # ── Phase 2: 選手詳細データの取得（レース単位 + キャッシュ追記） ───
         deadline = fetch_deadline(race_no, d_str, _soup=racelist_soup)
         if not df_raw.empty and "登録番号" in df_raw.columns:
             reg_nos = df_raw["登録番号"].tolist()
@@ -867,52 +848,55 @@ if app_mode == "予想":
                 racer_km = st.session_state[_race_cache_key]["racer_km"]
                 _remaining = max(0, _avg_total - (time.time() - _t_start))
                 progress_bar.progress(60, text=f"⚡ キャッシュ利用中（選手詳細データ）｜{_fmt_remaining(_remaining)}")
-            elif _has_venue_cache:
-                # ── 会場ファイルキャッシュ利用: HTTPリクエストなしでデータ構築 ─
-                ext_data = {
-                    "course_stats":   {rno: _venue_file_cache["ext_data"]["course_stats"].get(rno, {}) for rno in reg_nos if rno},
-                    "recent_results": {rno: _venue_file_cache["ext_data"]["recent_results"].get(rno, []) for rno in reg_nos if rno},
-                }
-                racer_km = build_race_kimarite(_venue_file_cache["km_cache"], df_raw, course_map=_course_map)
-                _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(60, text=f"⚡ 会場キャッシュ利用中（選手詳細データ）｜{_fmt_remaining(_remaining)}")
             else:
-                # ── 初回: 会場全選手の詳細データを一括取得 ────────
-                # raceindex から取得した全登録番号 + 当該レースの登録番号をマージ
-                _all_reg = list(dict.fromkeys(all_venue_reg_nos + [r for r in reg_nos if r]))
-                _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(int((done_count / total_tasks) * 60), text=f"⏳ 会場全選手データを一括取得中... ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
-                with ThreadPoolExecutor(max_workers=3, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
-                    f_ext      = executor.submit(fetch_extended_player_data, _all_reg)
-                    f_km_all   = executor.submit(fetch_all_kimarite_raw, _all_reg)
+                # ── 会場ファイルキャッシュから既知選手を取得、未知選手のみHTTP取得 ─
+                _cached_cs = _venue_file_cache["ext_data"]["course_stats"] if _has_venue_cache else {}
+                _cached_rr = _venue_file_cache["ext_data"]["recent_results"] if _has_venue_cache else {}
+                _cached_km = _venue_file_cache["km_cache"] if _has_venue_cache else {}
 
-                    phase2_map = {f_ext: "全選手コース別成績", f_km_all: "全選手決まり手"}
-                    for future in as_completed(phase2_map):
-                        done_count += 1
-                        name = phase2_map[future]
-                        pct = int((done_count / total_tasks) * 60)
-                        _remaining = max(0, _avg_total - (time.time() - _t_start))
-                        progress_bar.progress(pct, text=f"⏳ 会場全選手データ一括取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+                # キャッシュにない選手を特定
+                _need_fetch = [rno for rno in reg_nos if rno and rno not in _cached_cs]
 
-                    venue_ext_data = f_ext.result()
-                    venue_km_cache = f_km_all.result()
+                if _need_fetch:
+                    # 未知選手のみ取得（最大6人）
+                    _remaining = max(0, _avg_total - (time.time() - _t_start))
+                    _n_cached = len(reg_nos) - len(_need_fetch)
+                    progress_bar.progress(int((done_count / total_tasks) * 60),
+                        text=f"⏳ 選手データ取得中（キャッシュ済{_n_cached}人 / 新規{len(_need_fetch)}人）｜{_fmt_remaining(_remaining)}")
+                    with ThreadPoolExecutor(max_workers=3, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
+                        f_ext    = executor.submit(fetch_extended_player_data, _need_fetch)
+                        f_km_all = executor.submit(fetch_all_kimarite_raw, _need_fetch)
 
-                # ── 会場レベルキャッシュをファイルに保存 ──────────
-                _save_venue_cache(d_str, _selected_venue_code, venue_ext_data, venue_km_cache, lady_racers)
-                # 保存確認
-                _saved_path = _venue_cache_path(d_str, _selected_venue_code)
-                if os.path.exists(_saved_path):
-                    _fsize = os.path.getsize(_saved_path)
-                    st.toast(f"💾 会場キャッシュ保存完了 ({_fsize//1024}KB) - 次回レースは高速化されます", icon="💾")
+                        phase2_map = {f_ext: "選手コース別成績", f_km_all: "選手決まり手"}
+                        for future in as_completed(phase2_map):
+                            done_count += 1
+                            name = phase2_map[future]
+                            pct = int((done_count / total_tasks) * 60)
+                            _remaining = max(0, _avg_total - (time.time() - _t_start))
+                            progress_bar.progress(pct, text=f"⏳ {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+
+                        new_ext = f_ext.result()
+                        new_km  = f_km_all.result()
+
+                    # 新規データをキャッシュにマージ
+                    _cached_cs.update(new_ext.get("course_stats", {}))
+                    _cached_rr.update(new_ext.get("recent_results", {}))
+                    _cached_km.update(new_km)
+
+                    # ファイルキャッシュに追記保存
+                    _save_venue_cache(d_str, _selected_venue_code,
+                                      {"course_stats": _cached_cs, "recent_results": _cached_rr},
+                                      _cached_km, lady_racers)
                 else:
-                    st.toast("⚠️ 会場キャッシュの保存に失敗しました", icon="⚠️")
+                    _remaining = max(0, _avg_total - (time.time() - _t_start))
+                    progress_bar.progress(60, text=f"⚡ 全選手キャッシュ済（HTTP不要）｜{_fmt_remaining(_remaining)}")
 
                 # 当該レース分を抽出
                 ext_data = {
-                    "course_stats":   {rno: venue_ext_data["course_stats"].get(rno, {}) for rno in reg_nos if rno},
-                    "recent_results": {rno: venue_ext_data["recent_results"].get(rno, []) for rno in reg_nos if rno},
+                    "course_stats":   {rno: _cached_cs.get(rno, {}) for rno in reg_nos if rno},
+                    "recent_results": {rno: _cached_rr.get(rno, []) for rno in reg_nos if rno},
                 }
-                racer_km = build_race_kimarite(venue_km_cache, df_raw, course_map=_course_map)
+                racer_km = build_race_kimarite(_cached_km, df_raw, course_map=_course_map)
 
             # ── レース単位キャッシュにも保存（同一レース再予想用）──
             if not _has_static_cache:
