@@ -78,10 +78,10 @@ def _fmt_remaining(sec):
     return f"残り約{sec // 60}分{sec % 60}秒"
 
 class _SmoothProgress:
-    """経過時間ベースでプログレスバーをスムーズに更新するヘルパー。
+    """経過時間ベースでプログレスバーをスムーズに更新するヘルパー（メインスレッド）。
 
     フェーズごとに到達上限(ceiling)を設定し、経過時間に基づいて
-    なめらかに進行する。バックグラウンドスレッドが 0.3 秒間隔で更新。
+    なめらかに進行する。tick() をメインスレッドから呼んで更新。
     """
     def __init__(self, bar, avg_total, t_start):
         self._bar = bar
@@ -90,10 +90,6 @@ class _SmoothProgress:
         self._ceiling = 10          # 現在フェーズの上限%
         self._text = "⏳ 予想準備中..."
         self._current = 0           # 現在の表示%
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
     def _calc_pct(self):
         elapsed = time.time() - self._t_start
@@ -102,39 +98,43 @@ class _SmoothProgress:
         raw = int(ratio * 95)
         return min(raw, self._ceiling)
 
-    def _run(self):
-        while not self._stop.is_set():
-            self._update()
-            self._stop.wait(0.3)
-
-    def _update(self):
-        with self._lock:
-            pct = self._calc_pct()
-            # 逆戻りしない
-            if pct < self._current:
-                pct = self._current
-            self._current = pct
-            remaining = max(0, self._avg_total - (time.time() - self._t_start))
-            text = f"{self._text}｜{_fmt_remaining(remaining)}"
-        try:
-            self._bar.progress(pct, text=text)
-        except Exception:
-            pass
+    def tick(self):
+        """メインスレッドから呼び出してバーを更新"""
+        pct = self._calc_pct()
+        if pct < self._current:
+            pct = self._current
+        self._current = pct
+        remaining = max(0, self._avg_total - (time.time() - self._t_start))
+        text = f"{self._text}｜{_fmt_remaining(remaining)}"
+        self._bar.progress(pct, text=text)
 
     def set_phase(self, ceiling, text=None):
-        """フェーズ遷移: 上限%とテキストを更新"""
-        with self._lock:
-            self._ceiling = ceiling
-            if text:
-                self._text = text
-        self._update()
+        """フェーズ遷移: 上限%とテキストを更新し、即座にバーを更新"""
+        self._ceiling = ceiling
+        if text:
+            self._text = text
+        self.tick()
+
+    def wait_futures(self, futures, timeout_each=0.3):
+        """futuresの完了を待ちつつ、0.3秒ごとにバーを更新"""
+        pending = set(futures)
+        while pending:
+            done, pending = _wait_futures_with_timeout(pending, timeout_each)
+            self.tick()
+        # 全future完了後に例外チェック
+        for f in futures:
+            f.result()
 
     def finish(self, text="✅ 予想完了！"):
-        self._stop.set()
-        try:
-            self._bar.progress(100, text=text)
-        except Exception:
-            pass
+        self._bar.progress(100, text=text)
+
+def _wait_futures_with_timeout(fs, timeout):
+    """concurrent.futures.wait の薄いラッパー"""
+    from concurrent.futures import wait, FIRST_COMPLETED
+    if not fs:
+        return set(), set()
+    done, not_done = wait(fs, timeout=timeout, return_when=FIRST_COMPLETED)
+    return done, not_done
 
 # ── キャッシュ自動クリーンアップ ─────────────────────────────────
 def _cleanup_old_caches(keep_days: int = 2):
@@ -1010,10 +1010,7 @@ if app_mode == "予想":
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
             _smooth.set_phase(50)  # Phase 1 上限 50%
-            done_count = 0
-            for future in as_completed(phase1_map):
-                done_count += 1
-                future.result()  # 例外があればここで発生
+            _smooth.wait_futures(list(phase1_map.keys()))
 
             # ── 結果取得: 出走表（不変） ──
             if f_racelist is not None:
@@ -1078,6 +1075,7 @@ if app_mode == "予想":
                     with ThreadPoolExecutor(max_workers=3, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
                         f_ext    = executor.submit(fetch_extended_player_data, _need_fetch)
                         f_km_all = executor.submit(fetch_all_kimarite_raw, _need_fetch)
+                        _smooth.wait_futures([f_ext, f_km_all])
 
                         new_ext = f_ext.result()
                         new_km  = f_km_all.result()
