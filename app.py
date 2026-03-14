@@ -957,7 +957,7 @@ if app_mode == "予想":
                 name = phase1_map[future]
                 pct = int((done_count / total_tasks) * 60) if total_tasks > 0 else 60
                 _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(pct, text=f"⏳ データ取得中... {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+                progress_bar.progress(pct, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
 
             # ── 結果取得: 出走表（不変） ──
             if f_racelist is not None:
@@ -1008,7 +1008,7 @@ if app_mode == "予想":
                 ext_data = st.session_state[_race_cache_key]["ext_data"]
                 racer_km = st.session_state[_race_cache_key]["racer_km"]
                 _remaining = max(0, _avg_total - (time.time() - _t_start))
-                progress_bar.progress(60, text=f"⚡ キャッシュ利用中（選手詳細データ）｜{_fmt_remaining(_remaining)}")
+                progress_bar.progress(60, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
             else:
                 # ── 会場ファイルキャッシュから既知選手を取得、未知選手のみHTTP取得 ─
                 _cached_cs = _venue_file_cache["ext_data"]["course_stats"] if _has_venue_cache else {}
@@ -1023,7 +1023,7 @@ if app_mode == "予想":
                     _remaining = max(0, _avg_total - (time.time() - _t_start))
                     _n_cached = len(reg_nos) - len(_need_fetch)
                     progress_bar.progress(int((done_count / total_tasks) * 60),
-                        text=f"⏳ 選手データ取得中（キャッシュ済{_n_cached}人 / 新規{len(_need_fetch)}人）｜{_fmt_remaining(_remaining)}")
+                        text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
                     with ThreadPoolExecutor(max_workers=3, initializer=set_thread_venue, initargs=(_selected_venue_code,)) as executor:
                         f_ext    = executor.submit(fetch_extended_player_data, _need_fetch)
                         f_km_all = executor.submit(fetch_all_kimarite_raw, _need_fetch)
@@ -1034,7 +1034,7 @@ if app_mode == "予想":
                             name = phase2_map[future]
                             pct = int((done_count / total_tasks) * 60)
                             _remaining = max(0, _avg_total - (time.time() - _t_start))
-                            progress_bar.progress(pct, text=f"⏳ {name} 完了 ({done_count}/{total_tasks})｜{_fmt_remaining(_remaining)}")
+                            progress_bar.progress(pct, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
 
                         new_ext = f_ext.result()
                         new_km  = f_km_all.result()
@@ -1050,7 +1050,7 @@ if app_mode == "予想":
                                       _cached_km, lady_racers)
                 else:
                     _remaining = max(0, _avg_total - (time.time() - _t_start))
-                    progress_bar.progress(60, text=f"⚡ 全選手キャッシュ済（HTTP不要）｜{_fmt_remaining(_remaining)}")
+                    progress_bar.progress(60, text=f"⏳ 予想準備中...｜{_fmt_remaining(_remaining)}")
 
                 # 当該レース分を抽出
                 ext_data = {
