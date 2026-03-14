@@ -104,15 +104,33 @@ def _venue_cache_path(d_str, venue_code):
 def _load_venue_cache(d_str, venue_code):
     """会場レベルの選手データキャッシュをファイルから読み込む。"""
     path = _venue_cache_path(d_str, venue_code)
+    if not os.path.exists(path):
+        return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         # 必須キーの存在チェック
         if data.get("ext_data") and data.get("km_cache") is not None:
             return data
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
-        pass
+        print(f"[cache] 会場キャッシュ読み込み: キー不足 ext_data={bool(data.get('ext_data'))} km_cache={data.get('km_cache') is not None}")
+    except Exception as e:
+        print(f"[cache] 会場キャッシュ読み込み失敗: {e}")
     return None
+
+class _NumpyEncoder(json.JSONEncoder):
+    """numpy 型を JSON シリアライズ可能な Python ネイティブ型に変換する。"""
+    def default(self, obj):
+        try:
+            import numpy as _np
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            if isinstance(obj, (_np.floating,)):
+                return float(obj)
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
+        except ImportError:
+            pass
+        return super().default(obj)
 
 def _save_venue_cache(d_str, venue_code, ext_data, km_cache, lady_racers):
     """会場レベルの選手データキャッシュをファイルに保存する。"""
@@ -128,9 +146,16 @@ def _save_venue_cache(d_str, venue_code, ext_data, km_cache, lady_racers):
             if isinstance(courses, dict):
                 cache["km_cache"][rno] = {str(c): v for c, v in courses.items()}
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False)
+            json.dump(cache, f, ensure_ascii=False, cls=_NumpyEncoder)
     except Exception as e:
-        print(f"[cache] 会場キャッシュ保存失敗: {e}")
+        import traceback as _tb
+        _tb.print_exc()
+        # Streamlit UI にもエラーを表示（デバッグ用）
+        try:
+            import streamlit as _st2
+            _st2.toast(f"⚠️ キャッシュ保存エラー: {e}", icon="⚠️")
+        except Exception:
+            pass
 
 def _restore_venue_cache_types(data):
     """ファイルから読み込んだ会場キャッシュの型を復元する（JSON → Python）。"""
@@ -733,6 +758,13 @@ if app_mode == "予想":
         #     初回予想時に全選手分を一括取得し、2レース目以降は瞬時に利用
         _venue_file_cache = _load_venue_cache(d_str, _selected_venue_code)
         _has_venue_cache = _venue_file_cache is not None
+        # デバッグ: キャッシュ状態を表示
+        if _has_static_cache:
+            st.toast("⚡ レースキャッシュ利用（Phase2スキップ）", icon="⚡")
+        elif _has_venue_cache:
+            st.toast("📂 会場ファイルキャッシュ利用（HTTP不要）", icon="📂")
+        else:
+            st.toast("🌐 初回取得：会場全選手データを一括取得します", icon="🌐")
         if _has_venue_cache:
             _venue_file_cache = _restore_venue_cache_types(_venue_file_cache)
 
@@ -867,6 +899,13 @@ if app_mode == "予想":
 
                 # ── 会場レベルキャッシュをファイルに保存 ──────────
                 _save_venue_cache(d_str, _selected_venue_code, venue_ext_data, venue_km_cache, lady_racers)
+                # 保存確認
+                _saved_path = _venue_cache_path(d_str, _selected_venue_code)
+                if os.path.exists(_saved_path):
+                    _fsize = os.path.getsize(_saved_path)
+                    st.toast(f"💾 会場キャッシュ保存完了 ({_fsize//1024}KB) - 次回レースは高速化されます", icon="💾")
+                else:
+                    st.toast("⚠️ 会場キャッシュの保存に失敗しました", icon="⚠️")
 
                 # 当該レース分を抽出
                 ext_data = {
