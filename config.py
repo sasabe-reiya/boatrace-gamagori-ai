@@ -200,8 +200,32 @@ _AMAGASAKI_SCORE_WEIGHTS = dict(_SCORE_WEIGHTS_BASE)
 _AMAGASAKI_SCORE_WEIGHTS.update({
     "course_base":       [61.8, 10.1, 10.0, 11.2, 5.8, 2.1],  # 尼崎1着率
     "taka_boost":        0.0,   # 高橋アナ予想は蒲郡のみ
+    # ── 尼崎チューニング結果 (263レース, 2026-02-13〜2026-03-14) ──
+    "individual_temp":   7.095,
+    "win_rate":          1.503,
+    "local_win_rate":    0.84,
+    "nat2_rate":         3.433,
+    "loc2_rate":         0.477,
+    "exhibit_time":      0.746,
+    "exhibit_top_bonus": 2.497,
     "night_boost":       0.0,
     "calm_in_boost":     0.0,
+    "st_weight":         36.806,
+    "motor2_rate":       2.993,
+    "boat2_rate":        0.883,
+    "course_win_rate":   1.999,
+    "momentum":          2.146,
+    "mawari_time":       1.198,
+    "chokusen_time":     1.524,
+    "turn_master_bonus": 2.018,
+    "fl_f_penalty":      2.735,
+    "kado_boost":        0.754,
+    "makuri_sashi":      2.508,
+    "rank_a1":           2.995,
+    "rank_a2":           1.219,
+    "stabilizer_in_boost": 2.942,
+    "stabilizer_equalize": 0.15,
+    "prob_cap":          69.369,
 })
 
 # ── 会場マスタ ──────────────────────────────────────────────────
