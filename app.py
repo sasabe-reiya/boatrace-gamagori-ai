@@ -2946,6 +2946,77 @@ if app_mode == "予想":
                         unsafe_allow_html=True,
                     )
 
+            # 超直前！本線はこちら（just_picks）
+            just_picks = nikkan.get("just_picks", [])
+            writer_picks = nikkan.get("writer_picks", [])
+            if just_picks:
+                picks_html = ""
+                for pick in just_picks:
+                    parts = pick.split("-")
+                    combo = ""
+                    for p in parts:
+                        bg = _BOAT_BG_N.get(p, "#666")
+                        fg = _BOAT_FG_N.get(p, "#fff")
+                        border = "border:1px solid #888;" if p == "1" else ""
+                        combo += (
+                            f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                            f'background:{bg};color:{fg};{border}'
+                            f'border-radius:3px;width:22px;height:22px;font-weight:bold;font-size:0.78rem;'
+                            f'margin:0 1px">{p}</span>'
+                        )
+                    picks_html += f'<span style="margin-right:12px">{combo}</span>'
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#3a2a00,#1a1500);'
+                    f'border:2px solid #e6a817;border-radius:8px;padding:8px 12px;margin-top:8px">'
+                    f'<div style="display:flex;align-items:center;margin-bottom:6px">'
+                    f'<span style="background:#e74c3c;color:#fff;font-size:0.65rem;font-weight:bold;'
+                    f'padding:2px 6px;border-radius:3px;margin-right:8px">直前</span>'
+                    f'<span style="color:#f0c040;font-size:0.8rem;font-weight:bold">超直前！本線はこちら</span></div>'
+                    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px">{picks_html}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # 密着予想の買い目（writer_picks）
+            if writer_picks:
+                wp_html = ""
+                for pick in writer_picks:
+                    parts = pick.split("-")
+                    if len(parts) != 3:
+                        continue
+                    first, second, thirds = parts[0], parts[1], parts[2]
+                    combo = ""
+                    for p in [first, second]:
+                        bg = _BOAT_BG_N.get(p, "#666")
+                        fg = _BOAT_FG_N.get(p, "#fff")
+                        border = "border:1px solid #888;" if p == "1" else ""
+                        combo += (
+                            f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                            f'background:{bg};color:{fg};{border}'
+                            f'border-radius:3px;width:22px;height:22px;font-weight:bold;font-size:0.78rem;'
+                            f'margin:0 1px">{p}</span>'
+                        )
+                    combo += '<span style="color:#888;margin:0 2px">-</span>'
+                    for ch in thirds:
+                        bg = _BOAT_BG_N.get(ch, "#666")
+                        fg = _BOAT_FG_N.get(ch, "#fff")
+                        border = "border:1px solid #888;" if ch == "1" else ""
+                        combo += (
+                            f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                            f'background:{bg};color:{fg};{border}'
+                            f'border-radius:3px;width:22px;height:22px;font-weight:bold;font-size:0.78rem;'
+                            f'margin:0 1px">{ch}</span>'
+                        )
+                    wp_html += f'<div style="margin:3px 0;display:flex;align-items:center">{combo}</div>'
+                if wp_html:
+                    st.markdown(
+                        f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
+                        f'padding:8px 12px;margin-top:8px">'
+                        f'<div style="color:#7ab8e8;font-size:0.72rem;margin-bottom:6px">密着予想 買い目</div>'
+                        f'{wp_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+
             if nikkan.get("compi_scores"):
                 st.caption("※ コンピ指数はAIスコアに反映済みです")
 

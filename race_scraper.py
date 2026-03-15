@@ -2113,6 +2113,8 @@ def fetch_nikkan_yoso(race_no: int, date_str: str | None = None, venue: str = "a
         "chokuzen":         {},
         "accuracy":         {},
         "recovery":         {},
+        "writer_picks":     [],   # 密着予想の買い目 ["1-2-3456", ...]
+        "just_picks":       [],   # 超直前！本線 ["1-2-4", "1-4-2", ...]
     }
 
     url = f"{_NIKKAN_BASE}/boatrace/{venue}/{date_str}/{race_no}"
@@ -2231,14 +2233,38 @@ def fetch_nikkan_yoso(race_no: int, date_str: str | None = None, venue: str = "a
         sorted_boats = sorted(compi_scores.items(), key=lambda x: x[1], reverse=True)
         ranking_boats = [b for b, _ in sorted_boats]
 
+    # ── 密着予想の買い目（writer_rank）────────────────────────
+    # <ol> 内の <li num="N"> から 1着-2着-3着候補 を抽出
+    writer_picks = []
+    rank_div = soup.find(class_="writer_rank")
+    if rank_div:
+        for ol in rank_div.find_all("ol"):
+            nums = [li.get("num", "") for li in ol.find_all("li") if li.get("num")]
+            if len(nums) >= 3:
+                # nums[0]=1着, nums[1]=2着, nums[2:]=3着候補
+                pick = f"{nums[0]}-{nums[1]}-{''.join(nums[2:])}"
+                writer_picks.append(pick)
+
+    # ── 超直前！本線はこちら（writer_just）─────────────────────
+    # <i mark="N"> が3つずつグループで3連単の買い目
+    just_picks = []
+    just_div = soup.find(class_="writer_just")
+    if just_div:
+        marks = [i_tag.get("mark", "") for i_tag in just_div.find_all("i") if i_tag.get("mark")]
+        for i in range(0, len(marks) - 2, 3):
+            just_picks.append(f"{marks[i]}-{marks[i+1]}-{marks[i+2]}")
+
     result["compi_scores"] = compi_scores
     result["chokuzen"] = chokuzen
     result["reporter_ranking"] = ranking_boats
+    result["writer_picks"] = writer_picks
+    result["just_picks"] = just_picks
 
-    if compi_scores:
+    if compi_scores or writer_picks or just_picks:
         result["available"] = True
         chokuzen_summary = f", 直前気配={len(chokuzen)}艇" if chokuzen else ""
-        print(f"[nikkan] {venue} {race_no}R: コンピ指数={compi_scores}{chokuzen_summary}, 記者={result['reporter_name']}")
+        just_summary = f", 超直前={just_picks}" if just_picks else ""
+        print(f"[nikkan] {venue} {race_no}R: コンピ指数={compi_scores}{chokuzen_summary}{just_summary}, 記者={result['reporter_name']}")
     else:
         print(f"[nikkan] {venue} {race_no}R: データ取得できず")
 
