@@ -302,6 +302,7 @@ def calculate_scores(
     weather: dict,
     race_no: int,
     taka_data: dict | None = None,
+    nikkan_data: dict | None = None,
     racer_kimarite: dict | None = None,
     venue_code: str = DEFAULT_VENUE,
 ) -> pd.DataFrame:
@@ -716,6 +717,41 @@ def calculate_scores(
         for i, f in enumerate(frames_str):
             if f in cs:
                 scores[i] += taka_boost * cs[f]
+
+    # ── Step 10b: 日刊スポーツ記者予想ブースト（コンピ指数＋直前気配）─
+    if nikkan_data and nikkan_data.get("available"):
+        frames_str = df["枠番"].astype(str).values
+
+        # コンピ指数ブースト
+        compi = nikkan_data.get("compi_scores", {})
+        nikkan_boost = W.get("nikkan_boost", 0.0)
+        if nikkan_boost > 0 and compi:
+            compi_vals = [v for v in compi.values() if v > 0]
+            if compi_vals:
+                c_min = min(compi_vals)
+                c_max = max(compi_vals)
+                c_range = c_max - c_min if c_max > c_min else 1.0
+                for i, f in enumerate(frames_str):
+                    if f in compi:
+                        norm = (compi[f] - c_min) / c_range  # 0〜1
+                        scores[i] += nikkan_boost * norm
+
+        # 直前気配ブースト（行き足・回り足の評価）
+        chokuzen = nikkan_data.get("chokuzen", {})
+        if chokuzen:
+            _EVAL_SCORE = {"◎": 1.0, "☆": 1.0, "○": 0.5, "◯": 0.5, "△": 0.0, "×": -0.5}
+            ck_boost = nikkan_boost * 0.5  # コンピ指数の半分の重み
+            for i, f in enumerate(frames_str):
+                ck = chokuzen.get(f, {})
+                if not ck:
+                    continue
+                # 行き足と回り足を重視（モーターの伸び足・旋回力）
+                ikashi = _EVAL_SCORE.get(ck.get("行き足", ""), 0.0)
+                mawari = _EVAL_SCORE.get(ck.get("回り足", ""), 0.0)
+                motor_eval = _EVAL_SCORE.get(ck.get("モーター評価", ""), 0.0)
+                # 行き足0.4 + 回り足0.4 + モーター評価0.2 の加重平均
+                ck_score = ikashi * 0.4 + mawari * 0.4 + motor_eval * 0.2
+                scores[i] += ck_boost * ck_score
 
     # ── Step 11: ベイズ結合で確率変換 ─────────────────────────────
     # 個人スコア → ソフトマックスで個人力確率に変換
@@ -1745,6 +1781,7 @@ def predict(
     weather: dict,
     race_no: int,
     taka_data: dict | None = None,
+    nikkan_data: dict | None = None,
     odds_dict: dict | None = None,
     odds_2t: dict | None = None,
     racer_kimarite: dict | None = None,
@@ -1758,7 +1795,7 @@ def predict(
     weather_reliable = _is_weather_reliable(deadline)
     scoring_weather = weather if weather_reliable else _neutralize_weather(weather)
 
-    scored = calculate_scores(df, scoring_weather, race_no, taka_data=taka_data, racer_kimarite=racer_kimarite, venue_code=venue_code)
+    scored = calculate_scores(df, scoring_weather, race_no, taka_data=taka_data, nikkan_data=nikkan_data, racer_kimarite=racer_kimarite, venue_code=venue_code)
 
     # 【v6】進入コース情報を取得し、決まり手連動補正に渡す
     course_positions = scored["_course_pos"].tolist() if "_course_pos" in scored.columns else None

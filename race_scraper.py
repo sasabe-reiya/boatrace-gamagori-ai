@@ -2005,6 +2005,161 @@ def fetch_gamagori_taka(race_no: int, date_str: str | None = None) -> dict:
     return result
 
 
+# ─────────────────────────────────────────────
+# 13. 日刊スポーツ記者予想取得（尼崎用）
+# ─────────────────────────────────────────────
+
+_NIKKAN_BASE = "https://nikkansports.raceyosou.jp"
+
+
+def fetch_nikkan_yoso(race_no: int, date_str: str | None = None, venue: str = "amagasaki") -> dict:
+    """
+    日刊スポーツ直前予想ページから記者予想・コンピ指数・直前気配を取得する。
+
+    データソース: https://nikkansports.raceyosou.jp/boatrace/{venue}/{YYYYMMDD}/{race_no}
+
+    Returns
+    -------
+    {
+        "available":        bool,
+        "reporter_name":    str,              # 記者名（例: "北條"）
+        "reporter_ranking": list[str],        # 予想順位の枠番リスト ["1","2","3",...]
+        "compi_scores":     dict[str, float], # 枠番→コンピ指数 {"1": 66, "2": 64, ...}
+        "chokuzen":         dict[str, dict],  # 枠番→直前気配 {"1": {"行き足":"◎", "回り足":"○", ...}, ...}
+        "accuracy":         dict,             # {"今節": "33.3%", "年間": "47.0%"}
+        "recovery":         dict,             # {"今節": "48.0%", "年間": "86.5%"}
+    }
+    """
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+
+    result: dict = {
+        "available":        False,
+        "reporter_name":    "",
+        "reporter_ranking": [],
+        "compi_scores":     {},
+        "chokuzen":         {},
+        "accuracy":         {},
+        "recovery":         {},
+    }
+
+    url = f"{_NIKKAN_BASE}/boatrace/{venue}/{date_str}/{race_no}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except Exception as e:
+        print(f"[nikkan] 取得失敗: {url}: {e}")
+        return result
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # ── 記者名を取得（密着予想セクション） ─────────────────────
+    # 「○○記者 密着予想」のパターンから記者名を抽出
+    for tag in soup.find_all(string=re.compile(r"記者.*(密着|予想)")):
+        m = re.search(r"(\S+?)記者", tag)
+        if m:
+            result["reporter_name"] = m.group(1)
+            break
+
+    # ── 的中率・回収率 ────────────────────────────────────────
+    for tag in soup.find_all(string=re.compile(r"的中率")):
+        parent = tag.parent
+        if parent:
+            text = parent.get_text()
+            m_node = re.search(r"今節.*?的中率[：:\s]*(\d+\.?\d*)\s*%", text)
+            m_year = re.search(r"年間.*?的中率[：:\s]*(\d+\.?\d*)\s*%", text)
+            if m_node:
+                result["accuracy"]["今節"] = f"{m_node.group(1)}%"
+            if m_year:
+                result["accuracy"]["年間"] = f"{m_year.group(1)}%"
+
+    for tag in soup.find_all(string=re.compile(r"回収率")):
+        parent = tag.parent
+        if parent:
+            text = parent.get_text()
+            m_node = re.search(r"今節.*?回収率[：:\s]*(\d+\.?\d*)\s*%", text)
+            m_year = re.search(r"年間.*?回収率[：:\s]*(\d+\.?\d*)\s*%", text)
+            if m_node:
+                result["recovery"]["今節"] = f"{m_node.group(1)}%"
+            if m_year:
+                result["recovery"]["年間"] = f"{m_year.group(1)}%"
+
+    # ── 選手データテーブルから枠番・コンピ指数を取得 ────────────
+    # テーブル構造: TABLE[1]に枠番(1-6), TABLE[2]に詳細データ
+    # TABLE[2]は各選手4行で構成、メインデータ行(row 3,7,11,15,19,23)の
+    # cell[6]にコンピ指数が格納される
+    ranking_boats = []
+    compi_scores = {}
+
+    tables = soup.find_all("table")
+
+    # 詳細データテーブル（20行以上のテーブル）からコンピ指数を抽出
+    detail_table = None
+    for table in tables:
+        rows = table.find_all("tr")
+        if len(rows) >= 20:
+            detail_table = table
+            break
+
+    chokuzen = {}
+    # 直前気配カラムのキー名（cell[2]〜cell[5]に対応）
+    _CHOKUZEN_KEYS = ["行き足", "回り足", "ピット離れ", "モーター評価"]
+
+    if detail_table:
+        rows = detail_table.find_all("tr")
+        # 各選手のメインデータ行: 4行ごと、row_index=3から開始
+        for boat_idx in range(6):
+            row_idx = 3 + boat_idx * 4
+            if row_idx >= len(rows):
+                break
+            cells = rows[row_idx].find_all(["td", "th"])
+            frame = str(boat_idx + 1)
+            # cell[6]にコンピ指数（2桁整数）
+            if len(cells) > 6:
+                compi_text = cells[6].get_text(strip=True)
+                if re.match(r"^\d{2}$", compi_text):
+                    val = int(compi_text)
+                    if 20 <= val <= 99:
+                        compi_scores[frame] = val
+            # cell[2]〜cell[5]: 直前気配（行き足/回り足/ピット離れ/モーター評価）
+            # 直前未発表時は空、発表後は評価テキスト（◎/○/△/×等）or画像alt
+            boat_chokuzen = {}
+            for ci, key in enumerate(_CHOKUZEN_KEYS):
+                idx = 2 + ci
+                if idx < len(cells):
+                    # テキスト or 画像altから評価を取得
+                    cell = cells[idx]
+                    txt = cell.get_text(strip=True)
+                    if not txt:
+                        img = cell.find("img")
+                        if img:
+                            txt = img.get("alt", "").strip()
+                    if txt:
+                        boat_chokuzen[key] = txt
+            if boat_chokuzen:
+                chokuzen[frame] = boat_chokuzen
+
+    # ── 記者予想順位を取得 ──────────────────────────────────────
+    # コンピ指数の降順で記者予想順位を推定
+    if compi_scores:
+        sorted_boats = sorted(compi_scores.items(), key=lambda x: x[1], reverse=True)
+        ranking_boats = [b for b, _ in sorted_boats]
+
+    result["compi_scores"] = compi_scores
+    result["chokuzen"] = chokuzen
+    result["reporter_ranking"] = ranking_boats
+
+    if compi_scores:
+        result["available"] = True
+        chokuzen_summary = f", 直前気配={len(chokuzen)}艇" if chokuzen else ""
+        print(f"[nikkan] {venue} {race_no}R: コンピ指数={compi_scores}{chokuzen_summary}, 記者={result['reporter_name']}")
+    else:
+        print(f"[nikkan] {venue} {race_no}R: データ取得できず")
+
+    return result
+
+
 def generate_sample_data(race_no: int = 1) -> tuple[pd.DataFrame, dict]:
     import random
     random.seed(race_no)

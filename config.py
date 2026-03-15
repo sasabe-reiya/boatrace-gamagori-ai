@@ -57,6 +57,7 @@ _SCORE_WEIGHTS_BASE = {
     "stabilizer_in_boost":    3.0,
     "stabilizer_equalize":    0.15,
     "stabilizer_et_discount": 0.6,
+    "nikkan_boost":     0.0,   # 日刊スポーツ記者予想ブースト（尼崎のみ有効）
     "rank_a1":          3.0,
     "rank_a2":          1.2,
     "rank_b1":          0.0,
@@ -226,6 +227,7 @@ _AMAGASAKI_SCORE_WEIGHTS.update({
     "stabilizer_in_boost": 2.942,
     "stabilizer_equalize": 0.15,
     "prob_cap":          69.369,
+    "nikkan_boost":      2.0,   # 日刊スポーツ記者予想コンピ指数ブースト
 })
 
 # ── 会場マスタ ──────────────────────────────────────────────────
@@ -281,6 +283,7 @@ VENUE_CONFIGS = {
         "score_weights": _AMAGASAKI_SCORE_WEIGHTS,
         "has_original_exhibit": False,    # 独自展示タイムなし（boatrace.jpのデータを使用）
         "has_taka_yoso": False,
+        "has_nikkan_yoso": True,          # 日刊スポーツ記者予想（コンピ指数）
         "has_iot_weather": False,
         "has_official_weather": True,     # 尼崎公式サイト気象データ
         "official_site": "https://www.boatrace-amagasaki.jp",

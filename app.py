@@ -34,6 +34,7 @@ from race_scraper import (
     fetch_base_race_data, fetch_racelist_static, fetch_before_and_exhibit,
     merge_race_data, apply_extended_data, fetch_extended_player_data,
     fetch_deadline, fetch_odds_3t, fetch_odds_2tf, fetch_gamagori_taka,
+    fetch_nikkan_yoso,
     fetch_racer_kimarite, fetch_race_result, fetch_lady_racers,
     fetch_all_venue_reg_nos, fetch_all_kimarite_raw, build_race_kimarite,
     set_thread_venue,
@@ -353,7 +354,7 @@ def _cache_path(race_no, d_str, device_id=""):
         return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}_{device_id}.json")
     return os.path.join(_CACHE_DIR, f"result_{d_str}_{race_no}.json")
 
-def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, racer_km, race_result_data, lady_racers=None, device_id=""):
+def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t, taka, nikkan, racer_km, race_result_data, lady_racers=None, device_id=""):
     """予想結果をファイルにキャッシュ（セッション切断対策）"""
     try:
         # scored_dfをJSON化可能に変換
@@ -371,6 +372,7 @@ def _save_result_cache(race_no, d_str, result, weather, deadline, odds, odds_2t,
             "odds": odds,
             "odds_2t": odds_2t,
             "taka": taka,
+            "nikkan": nikkan,
             "racer_km": racer_km,
             "race_result": race_result_data,
             "race_no": race_no,
@@ -406,6 +408,7 @@ def _load_result_cache(race_no, d_str, device_id=""):
             "odds": cache.get("odds"),
             "odds_2t": cache.get("odds_2t"),
             "taka": cache.get("taka"),
+            "nikkan": cache.get("nikkan"),
             "racer_km": cache.get("racer_km"),
             "race_result": cache.get("race_result"),
             "lady_racers": set(cache.get("lady_racers", [])),
@@ -696,7 +699,7 @@ if app_mode == "予想":
     # ══════════════════════════════════════════════════════════════
 
     # ── セッション初期化 ──────────────────────────────────────────────
-    for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "racer_km", "race_result", "lady_racers"):
+    for key in ("result", "weather", "deadline", "race_no", "date_str", "odds", "odds_2t", "taka", "nikkan", "racer_km", "race_result", "lady_racers"):
         if key not in st.session_state:
             st.session_state[key] = None
     if "odds_last_refresh_time" not in st.session_state:
@@ -739,6 +742,7 @@ if app_mode == "予想":
             st.session_state.odds        = _cached["odds"]
             st.session_state.odds_2t     = _cached["odds_2t"]
             st.session_state.taka        = _cached["taka"]
+            st.session_state.nikkan      = _cached.get("nikkan")
             st.session_state.racer_km    = _cached["racer_km"]
             st.session_state.race_result = _cached["race_result"]
             st.session_state.lady_racers = _cached.get("lady_racers", set())
@@ -988,6 +992,14 @@ if app_mode == "予想":
                     f_taka = None  # available=True のキャッシュを利用
                 else:
                     f_taka = executor.submit(fetch_gamagori_taka, race_no, d_str)
+            f_nikkan = None
+            _cached_nikkan = {}
+            if _venue.get("has_nikkan_yoso"):
+                _cached_nikkan = st.session_state[_race_cache_key].get("nikkan", {}) if _has_static_cache else {}
+                if _cached_nikkan.get("available"):
+                    f_nikkan = None  # available=True のキャッシュを利用
+                else:
+                    f_nikkan = executor.submit(fetch_nikkan_yoso, race_no, d_str)
             f_lady = None
             if (_has_static_cache and "lady_racers" in st.session_state[_race_cache_key]) or \
                (_has_venue_cache and "lady_racers" in _venue_file_cache):
@@ -1009,6 +1021,8 @@ if app_mode == "予想":
                 phase1_map[f_lady] = "女子選手情報"
             if f_taka is not None:
                 phase1_map[f_taka] = "高橋アナ予想"
+            if f_nikkan is not None:
+                phase1_map[f_nikkan] = "日刊記者予想"
             _smooth.set_phase(70)  # Phase 1 上限 70%（HTTP取得が最も時間がかかる）
             _smooth.wait_futures(list(phase1_map.keys()))
 
@@ -1027,6 +1041,7 @@ if app_mode == "予想":
             odds     = f_odds.result()
             odds_2tf = f_odds_2tf.result()
             taka     = f_taka.result() if f_taka else _cached_taka
+            nikkan   = f_nikkan.result() if f_nikkan else _cached_nikkan
             if f_rresult is not None:
                 race_result_data = f_rresult.result()
             else:
@@ -1113,6 +1128,7 @@ if app_mode == "予想":
                     "ext_data": ext_data,
                     "racer_km": racer_km,
                     "taka": taka,
+                    "nikkan": nikkan,
                     "lady_racers": lady_racers,
                     "racelist_static": (card_df, grade_info, racelist_soup),
                     "before_data": (ex_df, weather, gama_time_df),
@@ -1143,7 +1159,8 @@ if app_mode == "予想":
             try:
                 result = predict(
                     df_raw, weather, race_no,
-                    taka_data=taka, odds_dict=odds,
+                    taka_data=taka, nikkan_data=nikkan,
+                    odds_dict=odds,
                     odds_2t=odds_2t,
                     racer_kimarite=racer_km,
                     deadline=deadline,
@@ -1170,6 +1187,7 @@ if app_mode == "予想":
             st.session_state.odds        = odds
             st.session_state.odds_2t     = odds_2t
             st.session_state.taka        = taka
+            st.session_state.nikkan      = nikkan
             st.session_state.racer_km    = racer_km
             st.session_state.race_result = race_result_data
             st.session_state.lady_racers = lady_racers
@@ -1193,7 +1211,7 @@ if app_mode == "予想":
             # 結果をファイルキャッシュに保存（セッション切断対策）
             _save_result_cache(
                 race_no, d_str, result, weather, deadline,
-                odds, odds_2t, taka, racer_km, race_result_data, lady_racers,
+                odds, odds_2t, taka, nikkan, racer_km, race_result_data, lady_racers,
                 device_id=_device_id,
             )
 
@@ -2797,6 +2815,181 @@ if app_mode == "予想":
                 unsafe_allow_html=True
             )
 
+        # ── 日刊スポーツ記者予想パネル（尼崎）──────────────────────────
+        nikkan = st.session_state.nikkan or {}
+        if _venue.get("has_nikkan_yoso"):
+            st.markdown("---")
+            st.markdown("### 📰 日刊スポーツ記者予想")
+
+        if _venue.get("has_nikkan_yoso") and nikkan.get("available"):
+            _BOAT_BG_N = {
+                "1": "#fff", "2": "#000", "3": "#e74c3c",
+                "4": "#3498db", "5": "#f1c40f", "6": "#2ecc71",
+            }
+            _BOAT_FG_N = {
+                "1": "#000", "2": "#fff", "3": "#fff",
+                "4": "#fff", "5": "#000", "6": "#fff",
+            }
+
+            # 記者名・的中率ヘッダー
+            reporter = nikkan.get("reporter_name", "")
+            acc = nikkan.get("accuracy", {})
+            rec = nikkan.get("recovery", {})
+            meta_parts = []
+            if reporter:
+                meta_parts.append(f"<b>{reporter}</b>記者")
+            if acc.get("今節"):
+                meta_parts.append(f"今節的中率 {acc['今節']}")
+            if acc.get("年間"):
+                meta_parts.append(f"年間的中率 {acc['年間']}")
+            if rec.get("年間"):
+                meta_parts.append(f"年間回収率 {rec['年間']}")
+            if meta_parts:
+                st.markdown(
+                    f'<div style="background:#1a2744;border-left:4px solid #e67e22;'
+                    f'padding:0.6rem 1rem;border-radius:6px;margin-bottom:0.6rem">'
+                    f'<div style="color:#ddd;font-size:0.82rem">'
+                    f'{" ｜ ".join(meta_parts)}'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+            # 記者予想順位（コンピ指数順）
+            ranking = nikkan.get("reporter_ranking", [])
+            compi = nikkan.get("compi_scores", {})
+            if ranking:
+                rank_badges = ""
+                for idx, boat in enumerate(ranking):
+                    bg = _BOAT_BG_N.get(boat, "#666")
+                    fg = _BOAT_FG_N.get(boat, "#fff")
+                    border = "border:1.5px solid #888;" if boat == "1" else ""
+                    c_val = compi.get(boat, "")
+                    c_html = f'<div style="color:#aaa;font-size:0.6rem;margin-top:1px">{c_val}</div>' if c_val else ""
+                    label = ["◎", "○", "▲", "△", "×", "★"][idx] if idx < 6 else ""
+                    rank_badges += (
+                        f'<div style="display:inline-flex;flex-direction:column;align-items:center;'
+                        f'margin:0 6px">'
+                        f'<div style="color:#f0a500;font-size:0.7rem;font-weight:bold;margin-bottom:2px">{label}</div>'
+                        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                        f'background:{bg};color:{fg};{border}'
+                        f'border-radius:50%;width:28px;height:28px;font-weight:bold;font-size:0.85rem">'
+                        f'{boat}</span>'
+                        f'{c_html}'
+                        f'</div>'
+                    )
+                st.markdown(
+                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
+                    f'padding:10px 8px">'
+                    f'<div style="color:#7ab8e8;font-size:0.72rem;margin-bottom:6px">予想順位（コンピ指数）</div>'
+                    f'<div style="display:flex;justify-content:center;align-items:flex-start">'
+                    f'{rank_badges}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+            # コンピ指数バーチャート
+            if compi:
+                bars_html = ""
+                max_compi = max(compi.values()) if compi else 1
+                for frame in ["1", "2", "3", "4", "5", "6"]:
+                    val = compi.get(frame, 0)
+                    if val <= 0:
+                        continue
+                    pct = val / max_compi * 100
+                    bg = _BOAT_BG_N.get(frame, "#666")
+                    fg = _BOAT_FG_N.get(frame, "#fff")
+                    border = "border:1px solid #888;" if frame == "1" else ""
+                    # 枠番バッジ
+                    badge = (
+                        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                        f'background:{bg};color:{fg};{border}'
+                        f'border-radius:50%;width:20px;height:20px;font-weight:bold;font-size:0.7rem;'
+                        f'margin-right:6px;flex-shrink:0">{frame}</span>'
+                    )
+                    # 選手名（scored DataFrameから取得）
+                    name = ""
+                    for _, r in scored.iterrows():
+                        if str(r.get("枠番", "")) == frame:
+                            name = str(r.get("選手名", ""))
+                            break
+                    bars_html += (
+                        f'<div style="display:flex;align-items:center;margin:3px 0">'
+                        f'{badge}'
+                        f'<div style="color:#ccc;font-size:0.72rem;width:70px;flex-shrink:0">{name}</div>'
+                        f'<div style="flex:1;background:#1a2744;border-radius:3px;height:16px;margin:0 6px">'
+                        f'<div style="background:linear-gradient(90deg,#e67e22,#f39c12);'
+                        f'width:{pct:.0f}%;height:100%;border-radius:3px"></div></div>'
+                        f'<div style="color:#f0a500;font-size:0.75rem;font-weight:bold;width:28px;text-align:right">{val}</div>'
+                        f'</div>'
+                    )
+                if bars_html:
+                    st.markdown(
+                        f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
+                        f'padding:8px 10px;margin-top:8px">'
+                        f'<div style="color:#7ab8e8;font-size:0.72rem;margin-bottom:6px">コンピ指数</div>'
+                        f'{bars_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # 直前気配テーブル
+            chokuzen = nikkan.get("chokuzen", {})
+            if chokuzen:
+                _EVAL_COLOR = {
+                    "◎": "#e74c3c", "◯": "#f39c12", "○": "#f39c12",
+                    "△": "#7f8c8d", "×": "#3498db", "☆": "#e74c3c",
+                }
+                ck_header = (
+                    '<tr><th style="color:#7ab8e8;font-size:0.7rem;padding:4px 6px;text-align:center">枠</th>'
+                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 6px;text-align:center">行き足</th>'
+                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 6px;text-align:center">回り足</th>'
+                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 6px;text-align:center">ピット離れ</th>'
+                    '<th style="color:#7ab8e8;font-size:0.7rem;padding:4px 6px;text-align:center">モーター評価</th></tr>'
+                )
+                ck_rows = ""
+                for frame in ["1", "2", "3", "4", "5", "6"]:
+                    ck = chokuzen.get(frame, {})
+                    if not ck:
+                        continue
+                    bg = _BOAT_BG_N.get(frame, "#666")
+                    fg = _BOAT_FG_N.get(frame, "#fff")
+                    border_s = "border:1px solid #888;" if frame == "1" else ""
+                    badge = (
+                        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                        f'background:{bg};color:{fg};{border_s}'
+                        f'border-radius:50%;width:20px;height:20px;font-weight:bold;font-size:0.7rem">'
+                        f'{frame}</span>'
+                    )
+                    cells_html = f'<td style="text-align:center;padding:3px">{badge}</td>'
+                    for key in ["行き足", "回り足", "ピット離れ", "モーター評価"]:
+                        val = ck.get(key, "-")
+                        color = _EVAL_COLOR.get(val, "#ccc")
+                        cells_html += (
+                            f'<td style="text-align:center;padding:3px;'
+                            f'color:{color};font-weight:bold;font-size:0.9rem">{val}</td>'
+                        )
+                    ck_rows += f"<tr>{cells_html}</tr>"
+                if ck_rows:
+                    st.markdown(
+                        f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
+                        f'padding:8px 10px;margin-top:8px">'
+                        f'<div style="color:#7ab8e8;font-size:0.72rem;margin-bottom:6px">直前気配</div>'
+                        f'<table style="width:100%;border-collapse:collapse">{ck_header}{ck_rows}</table>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            if nikkan.get("compi_scores"):
+                st.caption("※ コンピ指数はAIスコアに反映済みです")
+
+        elif _venue.get("has_nikkan_yoso"):
+            st.markdown(
+                '<div style="background:#151f35;border:1px solid #2a4a80;border-radius:8px;'
+                'padding:1rem;color:#666;text-align:center">'
+                '日刊スポーツ記者予想は未発表またはデータ取得外です。<br>'
+                '<small>レース直前に「予想実行」を再クリックすると取得できる場合があります</small>'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
         st.markdown("---")
 
         # ── 選手別決まり手 ────────────────────────────────────────────
@@ -3208,6 +3401,7 @@ if app_mode == "予想":
                     ("直近成績モメンタムの重み", f'{_W["momentum"]}'),
                     ("優勝戦イン強化", f'{_W["grade_final_boost"]}'),
                     ("高橋アナ予想ブースト", f'{_W["taka_boost"]}'),
+                    ("日刊記者予想ブースト", f'{_W.get("nikkan_boost", 0.0)}'),
                     ("選手別決まり手適合度の重み", f'{_W.get("racer_kimarite_weight", 3.0)}'),
                     ("決まり手連動2着補正", f'{_W.get("kimarite_placement_weight", 0.5)}'),
                     ("ソフトマックス温度", f'{_W.get("individual_temp", 15.0)}'),
