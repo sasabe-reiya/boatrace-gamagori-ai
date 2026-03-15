@@ -563,6 +563,8 @@ def _submit_original_exhibit(executor, venue_cfg: dict, race_no: int, date_str: 
         return executor.submit(fetch_suminoe_time, race_no, date_str)
     if code == "24":
         return executor.submit(fetch_omura_time, race_no, date_str)
+    if code == "13":
+        return executor.submit(fetch_amagasaki_time, race_no, date_str)
     return executor.submit(fetch_gamagori_time, race_no, date_str)
 
 
@@ -1783,6 +1785,76 @@ def fetch_omura_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:
 
     if rows:
         print(f"[omura] 展示タイム取得成功: {len(rows)}艇")
+    return pd.DataFrame(rows)
+
+
+# ─────────────────────────────────────────────
+# 11d. 尼崎公式サイト：オリジナル展示データ取得
+# ─────────────────────────────────────────────
+
+AMAGASAKI_EXHIBIT_URL = (
+    "https://www.boatrace-amagasaki.jp/modules/yosou/group-cyokuzen.php"
+)
+
+
+def fetch_amagasaki_time(race_no: int, date_str: str | None = None) -> pd.DataFrame:
+    """
+    尼崎競艇公式サイトのオリジナル展示データを取得する。
+
+    データソース: /modules/yosou/group-cyokuzen.php?day=YYYYMMDD&race=RR&kind=2&if=1
+    boatrace.jp にない尼崎独自計測データ（周回・まわり足）を含む。
+
+    テーブル構造（ヘッダー2行 + データ6行、8列）:
+      [0]枠 [1]選手情報 [2]体重 [3]調整 [4]チルト [5]展示タイム
+      [6]周回(=一周タイム) [7]まわり足タイム
+
+    Returns
+    -------
+    DataFrame with columns: 枠番, 展示タイム_gama, 一周タイム, まわり足タイム, 直線タイム
+    ※ 直線タイムは尼崎では計測なしのため常にNone。
+    空DataFrameの場合はデータ取得失敗。
+    """
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+
+    url = f"{AMAGASAKI_EXHIBIT_URL}?day={date_str}&race={race_no}&kind=2&if=1"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except Exception as e:
+        print(f"[amagasaki] 展示データ取得失敗 {url}: {e}")
+        return pd.DataFrame()
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    tbl = soup.find("table")
+    if not tbl:
+        return pd.DataFrame()
+
+    rows = []
+    for tr in tbl.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 8:
+            continue
+
+        waku = tds[0].get_text(strip=True)
+        if waku not in ("1", "2", "3", "4", "5", "6"):
+            continue
+
+        tenji  = _to_float(tds[5].get_text())
+        isshu  = _to_float(tds[6].get_text())
+        mawari = _to_float(tds[7].get_text())
+
+        rows.append({
+            "枠番":          waku,
+            "展示タイム_gama": tenji,
+            "一周タイム":     isshu,
+            "まわり足タイム": mawari,
+            "直線タイム":     None,
+        })
+
+    if rows:
+        print(f"[amagasaki] 展示タイム取得成功: {len(rows)}艇")
     return pd.DataFrame(rows)
 
 

@@ -281,7 +281,7 @@ VENUE_CONFIGS = {
         "settings": _AMAGASAKI_SETTINGS,
         "course_stats": _AMAGASAKI_COURSE_STATS,
         "score_weights": _AMAGASAKI_SCORE_WEIGHTS,
-        "has_original_exhibit": False,    # 独自展示タイムなし（boatrace.jpのデータを使用）
+        "has_original_exhibit": True,     # 尼崎公式サイトから周回・まわり足タイムを取得
         "has_taka_yoso": False,
         "has_nikkan_yoso": True,          # 日刊スポーツ記者予想（コンピ指数）
         "has_iot_weather": False,
