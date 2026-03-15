@@ -282,7 +282,7 @@ VENUE_CONFIGS = {
         "has_original_exhibit": False,    # 独自展示タイムなし（boatrace.jpのデータを使用）
         "has_taka_yoso": False,
         "has_iot_weather": False,
-        "has_official_weather": False,    # TODO: 公式サイト気象ページURL判明後に有効化
+        "has_official_weather": True,     # 尼崎公式サイト気象データ
         "official_site": "https://www.boatrace-amagasaki.jp",
     },
 }

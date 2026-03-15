@@ -325,6 +325,56 @@ def fetch_suminoe_weather() -> dict | None:
 
 
 # ─────────────────────────────────────────────
+# 1.7  尼崎競艇リアルタイム気象データ取得（公式サイト）
+# ─────────────────────────────────────────────
+_AMAGASAKI_WEATHER_URL = "https://www.boatrace-amagasaki.jp/modules/yosou/group-syussou.php"
+
+
+def fetch_amagasaki_weather(race_no: int = 1, date_str: str | None = None) -> dict | None:
+    """尼崎競艇公式サイトの出走表ページから気象データを取得する。
+    レスポンスに含まれる jQuery の .html() / .attr() 呼び出しから値を抽出する。
+    失敗時は None を返す。"""
+    if date_str is None:
+        date_str = datetime.now(_JST).strftime("%Y%m%d")
+
+    url = f"{_AMAGASAKI_WEATHER_URL}?day={date_str}&race={race_no}&if=1"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+        text = resp.text
+    except Exception:
+        return None
+
+    # jQuery の .html('値') パターンから値を抽出
+    def _extract(cls: str) -> str:
+        m = re.search(rf'\.{cls}[^)]*\)\.html\([\'"](.+?)[\'"]\)', text)
+        return m.group(1) if m else "-"
+
+    tenki = _extract("js-weather")
+    kaze_dir_raw = _extract("js-dir")          # "北西<br>（向い風）" 等
+    kaze_spd = _extract("js-wind_speed")       # "3m"
+    nami = _extract("js-wave_height")          # "0cm"
+    kion = _extract("js-air_temp")             # "10.0℃"
+    suion = _extract("js-water_temp")          # "9.6℃"
+
+    # 風向から <br> 以降（追い風/向い風 注釈）を除去
+    kaze_dir = re.sub(r'<br>.*', '', kaze_dir_raw).strip()
+
+    if all(v == "-" for v in (tenki, kaze_dir, kaze_spd, kion, suion)):
+        return None
+
+    return {
+        "天気": tenki,
+        "風向": kaze_dir,
+        "風速": kaze_spd,
+        "波高": nami,
+        "気温": kion,
+        "水温": suion,
+    }
+
+
+# ─────────────────────────────────────────────
 # 2. 直前情報取得 (風向・展示タイム)
 # ─────────────────────────────────────────────
 def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.DataFrame, dict]:
@@ -444,6 +494,8 @@ def fetch_before_info(race_no: int, date_str: str | None = None) -> tuple[pd.Dat
             sw = fetch_suminoe_weather()
         elif _venue_code == "24":
             sw = fetch_omura_weather(race_no, date_str)
+        elif _venue_code == "13":
+            sw = fetch_amagasaki_weather(race_no, date_str)
         else:
             sw = None
         if sw:
