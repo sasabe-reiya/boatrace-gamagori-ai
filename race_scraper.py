@@ -2105,6 +2105,14 @@ def fetch_nikkan_yoso(race_no: int, date_str: str | None = None, venue: str = "a
     chokuzen = {}
     # 直前気配カラムのキー名（cell[2]〜cell[5]に対応）
     _CHOKUZEN_KEYS = ["行き足", "回り足", "ピット離れ", "モーター評価"]
+    # <i> タグの CSSクラス名 → 評価記号マッピング
+    _ICON_CLASS_MAP = {
+        "icon_circle2":  "◎",
+        "icon_circle":   "○",
+        "icon_triangle": "△",
+        "icon_cross":    "×",
+        "icon_none":     "",     # 未発表
+    }
 
     if detail_table:
         rows = detail_table.find_all("tr")
@@ -2123,20 +2131,25 @@ def fetch_nikkan_yoso(race_no: int, date_str: str | None = None, venue: str = "a
                     if 20 <= val <= 99:
                         compi_scores[frame] = val
             # cell[2]〜cell[5]: 直前気配（行き足/回り足/ピット離れ/モーター評価）
-            # 直前未発表時は空、発表後は評価テキスト（◎/○/△/×等）or画像alt
+            # 評価は <i class="icon_circle"> 等のCSSクラスで表現される
             boat_chokuzen = {}
             for ci, key in enumerate(_CHOKUZEN_KEYS):
                 idx = 2 + ci
                 if idx < len(cells):
-                    # テキスト or 画像altから評価を取得
                     cell = cells[idx]
-                    txt = cell.get_text(strip=True)
-                    if not txt:
-                        img = cell.find("img")
-                        if img:
-                            txt = img.get("alt", "").strip()
-                    if txt:
-                        boat_chokuzen[key] = txt
+                    # <i> タグのクラス名から評価を取得
+                    icon = cell.find("i")
+                    if icon:
+                        for cls in icon.get("class", []):
+                            mapped = _ICON_CLASS_MAP.get(cls, "")
+                            if mapped:
+                                boat_chokuzen[key] = mapped
+                                break
+                    # フォールバック: テキスト直接取得
+                    if key not in boat_chokuzen:
+                        txt = cell.get_text(strip=True)
+                        if txt:
+                            boat_chokuzen[key] = txt
             if boat_chokuzen:
                 chokuzen[frame] = boat_chokuzen
 

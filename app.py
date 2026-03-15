@@ -2854,39 +2854,8 @@ if app_mode == "予想":
                     unsafe_allow_html=True,
                 )
 
-            # 記者予想順位（コンピ指数順）
-            ranking = nikkan.get("reporter_ranking", [])
-            compi = nikkan.get("compi_scores", {})
-            if ranking:
-                rank_badges = ""
-                for idx, boat in enumerate(ranking):
-                    bg = _BOAT_BG_N.get(boat, "#666")
-                    fg = _BOAT_FG_N.get(boat, "#fff")
-                    border = "border:1.5px solid #888;" if boat == "1" else ""
-                    c_val = compi.get(boat, "")
-                    c_html = f'<div style="color:#aaa;font-size:0.6rem;margin-top:1px">{c_val}</div>' if c_val else ""
-                    label = ["◎", "○", "▲", "△", "×", "★"][idx] if idx < 6 else ""
-                    rank_badges += (
-                        f'<div style="display:inline-flex;flex-direction:column;align-items:center;'
-                        f'margin:0 6px">'
-                        f'<div style="color:#f0a500;font-size:0.7rem;font-weight:bold;margin-bottom:2px">{label}</div>'
-                        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-                        f'background:{bg};color:{fg};{border}'
-                        f'border-radius:50%;width:28px;height:28px;font-weight:bold;font-size:0.85rem">'
-                        f'{boat}</span>'
-                        f'{c_html}'
-                        f'</div>'
-                    )
-                st.markdown(
-                    f'<div style="background:#0e1a2e;border:1px solid #2a4a80;border-radius:8px;'
-                    f'padding:10px 8px">'
-                    f'<div style="color:#7ab8e8;font-size:0.72rem;margin-bottom:6px">予想順位（コンピ指数）</div>'
-                    f'<div style="display:flex;justify-content:center;align-items:flex-start">'
-                    f'{rank_badges}</div></div>',
-                    unsafe_allow_html=True,
-                )
-
             # コンピ指数バーチャート
+            compi = nikkan.get("compi_scores", {})
             if compi:
                 bars_html = ""
                 max_compi = max(compi.values()) if compi else 1
