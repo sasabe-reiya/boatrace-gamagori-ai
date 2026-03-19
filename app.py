@@ -438,6 +438,42 @@ if not _device_id:
     }})();
     </script>""", height=0)
 
+# ── 診断ページ（?diag=1 でアクセス）──────────────────────────────
+if st.query_params.get("diag") == "1":
+    st.title("接続診断")
+    st.write("Renderサーバーから各サイトへの接続をテストします。")
+    import requests as _diag_req
+    _diag_targets = [
+        ("boatrace.jp 出走表", f"{_cfg.BASE_URL}/owpc/pc/race/racelist", {"jcd": "07", "hd": _today_jst().strftime('%Y%m%d'), "rno": 1}),
+        ("boatrace.jp 直前情報", f"{_cfg.BASE_URL}/owpc/pc/race/beforeinfo", {"jcd": "07", "hd": _today_jst().strftime('%Y%m%d'), "rno": 1}),
+        ("蒲郡公式サイト", "https://www.gamagori-kyotei.com/", {}),
+    ]
+    for name, url, params in _diag_targets:
+        try:
+            _dr = _diag_req.get(url, params=params, headers=_cfg.HEADERS, timeout=15)
+            _status = _dr.status_code
+            _size = len(_dr.content)
+            if _status == 200 and _size > 1000:
+                st.success(f"{name}: OK (status={_status}, size={_size:,}bytes)")
+            else:
+                st.warning(f"{name}: status={_status}, size={_size:,}bytes")
+                with st.expander("レスポンス先頭"):
+                    st.code(_dr.text[:2000])
+        except Exception as _de:
+            st.error(f"{name}: 接続失敗 - {_de}")
+
+    # サーバー情報
+    import platform
+    st.markdown("---")
+    st.write(f"**Python:** {platform.python_version()}")
+    st.write(f"**Platform:** {platform.platform()}")
+    try:
+        _ip_resp = _diag_req.get("https://httpbin.org/ip", timeout=10)
+        st.write(f"**サーバーIP:** {_ip_resp.json().get('origin', '不明')}")
+    except Exception:
+        st.write("**サーバーIP:** 取得失敗")
+    st.stop()
+
 # ── 会場選択ページ ────────────────────────────────────────────────
 # query_params に venue が無い場合、会場選択画面を表示してメインに進まない
 if "venue" not in st.query_params:
